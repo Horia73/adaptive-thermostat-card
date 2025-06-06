@@ -137,8 +137,28 @@ class AdaptiveThermostatCard extends LitElement {
         return 'mdi:account-arrow-right';
       case 'sleep':
         return 'mdi:sleep';
+      case 'eco':
+      case 'economy':
+        return 'mdi:leaf';
+      case 'boost':
+      case 'turbo':
+        return 'mdi:rocket-launch';
+      case 'comfort':
+        return 'mdi:sofa';
+      case 'auto':
+      case 'automatic':
+        return 'mdi:thermostat-auto';
+      case 'manual':
+        return 'mdi:hand-back-right';
+      case 'none':
+      case 'off':
+        return 'mdi:power-off';
+      case 'heat':
+        return 'mdi:fire';
+      case 'cool':
+        return 'mdi:snowflake';
       default:
-        return 'mdi:thermostat';
+        return 'mdi:thermostat-box';
     }
   }
 
