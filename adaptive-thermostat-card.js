@@ -667,14 +667,13 @@ class AdaptiveThermostatCard extends LitElement {
       }
       
       .presets {
-        display: flex;
-        justify-content: space-around;
-        flex-wrap: wrap;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
         gap: 8px;
+        margin-top: var(--spacing);
       }
       
       .preset {
-        flex: 1;
         min-width: 80px;
         min-height: 60px;
         background-color: var(--card-background-color);
@@ -690,9 +689,10 @@ class AdaptiveThermostatCard extends LitElement {
       }
       
       .preset.active {
-        background-color: var(--primary-color);
+        background-color: var(--primary-color, #2196f3);
         color: white;
-        border-color: var(--primary-color);
+        border-color: var(--primary-color, #2196f3);
+        box-shadow: 0 2px 8px rgba(33, 150, 243, 0.3);
       }
       
       .preset:hover:not(.active) {
