@@ -528,6 +528,12 @@ class AdaptiveThermostatCard extends LitElement {
         font-size: 0.9rem;
       }
       
+      .control-button ha-icon {
+        --mdc-icon-size: 24px;
+        width: 24px;
+        height: 24px;
+      }
+      
       .flame-button.active {
         background-color: #ffab40;
         color: white;
@@ -592,6 +598,12 @@ class AdaptiveThermostatCard extends LitElement {
         background-color: rgba(var(--rgb-primary-color, 0, 134, 196), 0.2);
       }
       
+      .temp-button ha-icon {
+        --mdc-icon-size: 20px;
+        width: 20px;
+        height: 20px;
+      }
+      
       .label {
         font-size: 0.9rem;
         color: var(--secondary-text-color);
@@ -618,6 +630,9 @@ class AdaptiveThermostatCard extends LitElement {
       .sensor ha-icon {
         color: var(--primary-color);
         margin-bottom: 8px;
+        --mdc-icon-size: 24px;
+        width: 24px;
+        height: 24px;
       }
       
       .sensor .value {
@@ -641,6 +656,7 @@ class AdaptiveThermostatCard extends LitElement {
       .preset {
         flex: 1;
         min-width: 80px;
+        min-height: 60px;
         background-color: var(--card-background-color);
         border: 1px solid rgba(var(--rgb-primary-color, 0, 134, 196), 0.2);
         border-radius: 8px;
@@ -665,6 +681,18 @@ class AdaptiveThermostatCard extends LitElement {
       
       .preset ha-icon {
         margin-bottom: 4px;
+        --mdc-icon-size: 24px;
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      
+      .preset span {
+        font-size: 0.85rem;
+        font-weight: 500;
+        text-align: center;
       }
       
       .warning {
