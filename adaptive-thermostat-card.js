@@ -23,7 +23,7 @@ class AdaptiveThermostatCard extends LitElement {
     
     return { 
       entity: climateEntities.length > 0 ? climateEntities[0] : '',
-      name: "Adaptive Thermostat" 
+      name: "" 
     };
   }
 
