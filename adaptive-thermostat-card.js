@@ -5,17 +5,17 @@ const html = LitElement.prototype.html;
 const css = LitElement.prototype.css;
 
 class AdaptiveThermostatCard extends LitElement {
+  constructor() {
+    super();
+    this._presetMenuOpen = false;
+    this._handleOutsideClick = this._handleOutsideClick.bind(this);
+  }
+
   static get properties() {
     return {
       hass: { type: Object },
-      config: { type: Object },
-      _presetDropdownOpen: { type: Boolean }
+      config: { type: Object }
     };
-  }
-
-  constructor() {
-    super();
-    this._presetDropdownOpen = false;
   }
 
   static getConfigElement() {
@@ -41,7 +41,12 @@ class AdaptiveThermostatCard extends LitElement {
   }
 
   // Improve temperature changes to be less laggy
-  _increaseTemperature() {
+  _increaseTemperature(e) {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+
     const entityId = this.config.entity;
     const climate = this.hass.states[entityId];
     
@@ -71,7 +76,12 @@ class AdaptiveThermostatCard extends LitElement {
     }
   }
 
-  _decreaseTemperature() {
+  _decreaseTemperature(e) {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+
     const entityId = this.config.entity;
     const climate = this.hass.states[entityId];
     
@@ -101,66 +111,15 @@ class AdaptiveThermostatCard extends LitElement {
     }
   }
 
-  _togglePower(e) {
-    if (e) {
-      e.stopPropagation();
-      e.preventDefault();
-    }
-    
-    const entityId = this.config.entity;
-    const climate = this.hass.states[entityId];
-    
-    if (!climate) {
-      return;
-    }
-    
-    const currentState = climate.state;
-    
-    if (currentState === 'off') {
-      // Turn on to heat mode
-      const availableModes = climate.attributes.hvac_modes || [];
-      if (availableModes.includes('heat')) {
-        this.hass.callService('climate', 'set_hvac_mode', {
-          entity_id: entityId,
-          hvac_mode: 'heat'
-        });
-      } else if (availableModes.length > 0 && availableModes[0] !== 'off') {
-        this.hass.callService('climate', 'set_hvac_mode', {
-          entity_id: entityId,
-          hvac_mode: availableModes.filter(mode => mode !== 'off')[0]
-        });
-      }
-    } else {
-      // Turn off
-      this.hass.callService('climate', 'set_hvac_mode', {
-        entity_id: entityId,
-        hvac_mode: 'off'
-      });
-    }
-  }
-
-  _togglePresetDropdown(e) {
-    if (e) {
-      e.stopPropagation();
-      e.preventDefault();
-    }
-    this._presetDropdownOpen = !this._presetDropdownOpen;
-  }
-
-  _setPreset(preset, e) {
-    if (e) {
-      e.stopPropagation();
-      e.preventDefault();
-    }
-    
+  // Handle preset mode changes
+  _setPreset(preset) {
     const entityId = this.config.entity;
     
+    // Don't turn off for any preset, just set the preset mode
     this.hass.callService('climate', 'set_preset_mode', {
       entity_id: entityId,
       preset_mode: preset
     });
-    
-    this._presetDropdownOpen = false;
   }
 
   _getPresetIcon(preset) {
@@ -201,16 +160,20 @@ class AdaptiveThermostatCard extends LitElement {
   }
 
   _handleCardClick(e) {
-    // Prevent clicks on buttons and interactive elements from triggering card click
-    if (e.target.tagName === 'BUTTON' || 
-        e.target.tagName === 'HA-ICON' ||
-        e.target.closest('button') ||
-        e.target.closest('.temp-button') ||
-        e.target.closest('.power-button') ||
-        e.target.closest('.preset')) {
+    const interactiveSelectors = [
+      'button',
+      'ha-icon',
+      '.metric-control',
+      '.action-button',
+      '.preset-menu',
+      '.preset-dropdown',
+      '.preset-option'
+    ];
+
+    if (interactiveSelectors.some(selector => e.target.closest(selector))) {
       return;
     }
-    
+
     // Fire the more-info event to open the entity popup
     const entityId = this.config.entity;
     const event = new CustomEvent('hass-more-info', {
@@ -244,111 +207,224 @@ class AdaptiveThermostatCard extends LitElement {
     const targetTemp = climate.attributes.temperature;
     const currentPreset = climate.attributes.preset_mode;
     const presets = climate.attributes.preset_modes || [];
-    
+
     // Get related sensor entity IDs from climate attributes
     const humiditySensorId = climate.attributes.humidity_sensor;
     const outdoorSensorId = climate.attributes.outdoor_sensor;
-    const weatherSensorId = climate.attributes.weather_sensor;
-    const motionSensorId = climate.attributes.motion_sensor;
-    const doorWindowSensorId = climate.attributes.door_window_sensor;
-    
     // Only get sensor states if the sensors are configured and exist
     const humiditySensor = humiditySensorId && this.hass.states[humiditySensorId] 
                            ? this.hass.states[humiditySensorId] : null;
     const outdoorSensor = outdoorSensorId && this.hass.states[outdoorSensorId]
                           ? this.hass.states[outdoorSensorId] : null;
-    const weatherSensor = weatherSensorId && this.hass.states[weatherSensorId]
-                          ? this.hass.states[weatherSensorId] : null;
-    const motionSensor = motionSensorId && this.hass.states[motionSensorId]
-                         ? this.hass.states[motionSensorId] : null;
-    const doorWindowSensor = doorWindowSensorId && this.hass.states[doorWindowSensorId]
-                             ? this.hass.states[doorWindowSensorId] : null;
+
+    const humidityKnown = humiditySensor && humiditySensor.state &&
+      humiditySensor.state !== 'unknown' && humiditySensor.state !== 'unavailable';
+    const outdoorKnown = outdoorSensor && outdoorSensor.state &&
+      outdoorSensor.state !== 'unknown' && outdoorSensor.state !== 'unavailable';
+    const orderedPresets = presets.length ? this._getOrderedPresets(presets) : [];
+    const activePreset = currentPreset && currentPreset !== 'none' ? currentPreset : null;
+    const presetLabel = activePreset ? this._formatPresetName(activePreset) : 'Preset';
+    const presetIcon = activePreset ? this._getPresetIcon(activePreset) : 'mdi:shape-outline';
+
+    if (!orderedPresets.length && this._presetMenuOpen) {
+      this._presetMenuOpen = false;
+      document.removeEventListener('click', this._handleOutsideClick, true);
+    }
 
     return html`
       <ha-card @click="${this._handleCardClick}">
         <div class="card-content">
-          <!-- Compact info row with all temps and humidity -->
-          <div class="compact-info-row">
-            ${humiditySensor && humiditySensor.state ? html`
-              <div class="info-item">
-                <div class="info-label">Humidity</div>
-                <div class="info-value">${humiditySensor.state}<span class="unit">%</span></div>
-              </div>
-            ` : ''}
-            
-            <div class="info-item">
-              <div class="info-label">Indoor</div>
-              <div class="info-value">
-                ${currentTemp !== undefined ? html`${currentTemp}<span class="unit">°</span>` : '--°'}
+          <div class="top-row">
+            <div class="info-block">
+              <div class="name">${name}</div>
+              <div class="power-status ${isOn ? 'on' : 'off'}">
+                ${isOn
+                  ? html`<span>${isHeating ? 'Heating' : 'On'}</span>`
+                  : html`<span>Off</span>`}
               </div>
             </div>
-            
-            <div class="info-item target-item">
-              <button class="compact-temp-btn" @click="${this._decreaseTemperature}">
-                <ha-icon icon="mdi:minus"></ha-icon>
-              </button>
-              <div class="target-display">
-                <div class="info-label">Target</div>
-                <div class="info-value target-value">
-                  ${targetTemp !== undefined ? html`${targetTemp}<span class="unit">°</span>` : '--°'}
+            <div class="metrics-grid">
+              <div class="metric">
+                <div class="metric-label">Indoor</div>
+                <div class="metric-value">
+                  ${currentTemp !== undefined
+                    ? html`${currentTemp}<span class="metric-unit">°</span>`
+                    : html`--<span class="metric-unit">°</span>`}
                 </div>
               </div>
-              <button class="compact-temp-btn" @click="${this._increaseTemperature}">
-                <ha-icon icon="mdi:plus"></ha-icon>
-              </button>
-            </div>
-            
-            ${outdoorSensor ? html`
-              <div class="info-item">
-                <div class="info-label">Outdoor</div>
-                <div class="info-value">${outdoorSensor.state}<span class="unit">°</span></div>
+              <div class="metric target-metric">
+                <button class="metric-control" @click="${this._decreaseTemperature}">
+                  <ha-icon icon="mdi:minus"></ha-icon>
+                </button>
+                <div class="target-value">
+                  <div class="metric-label">Target</div>
+                  <div class="metric-value">
+                    ${targetTemp !== undefined
+                      ? html`${targetTemp}<span class="metric-unit">°</span>`
+                      : html`--<span class="metric-unit">°</span>`}
+                  </div>
+                </div>
+                <button class="metric-control" @click="${this._increaseTemperature}">
+                  <ha-icon icon="mdi:plus"></ha-icon>
+                </button>
               </div>
-            ` : ''}
+              <div class="metric">
+                <div class="metric-label">Humidity</div>
+                <div class="metric-value">
+                  ${humidityKnown
+                    ? html`${humiditySensor.state}<span class="metric-unit">%</span>`
+                    : html`--<span class="metric-unit">%</span>`}
+                </div>
+              </div>
+              <div class="metric">
+                <div class="metric-label">Outdoor</div>
+                <div class="metric-value">
+                  ${outdoorKnown
+                    ? html`${outdoorSensor.state}<span class="metric-unit">°</span>`
+                    : html`--<span class="metric-unit">°</span>`}
+                </div>
+              </div>
+            </div>
           </div>
-          
-          <!-- Bottom control row with power toggle and preset dropdown -->
-          <div class="control-row">
-            <button 
-              class="control-btn power-btn ${isOn ? 'active' : ''}" 
+          <div class="bottom-row">
+            <button
+              class="action-button toggle-button ${isOn ? 'active' : ''}"
               @click="${this._togglePower}"
             >
               <ha-icon icon="${isOn ? 'mdi:fire' : 'mdi:power'}"></ha-icon>
-              <span>${isOn ? 'Heat' : 'Off'}</span>
+              <span>${isOn ? (isHeating ? 'Heating' : 'On') : 'Off'}</span>
             </button>
-            
-            ${presets && presets.length > 0 ? html`
-              <div class="preset-container">
-                <button 
-                  class="control-btn preset-btn ${this._presetDropdownOpen ? 'open' : ''}" 
-                  @click="${this._togglePresetDropdown}"
-                >
-                  <ha-icon icon="${this._getPresetIcon(currentPreset || 'none')}"></ha-icon>
-                  <span>${this._formatPresetName(currentPreset || 'Preset')}</span>
-                  <ha-icon class="dropdown-icon" icon="mdi:chevron-${this._presetDropdownOpen ? 'up' : 'down'}"></ha-icon>
-                </button>
-                
-                ${this._presetDropdownOpen ? html`
-                  <div class="preset-dropdown">
-                    ${presets.map(preset => html`
-                      <button 
-                        class="preset-option ${currentPreset === preset ? 'active' : ''}"
-                        @click="${(e) => this._setPreset(preset, e)}"
-                      >
-                        <ha-icon icon="${this._getPresetIcon(preset)}"></ha-icon>
-                        <span>${this._formatPresetName(preset)}</span>
-                      </button>
-                    `)}
-                  </div>
-                ` : ''}
-              </div>
-            ` : ''}
+            <div class="preset-menu ${this._presetMenuOpen ? 'open' : ''}">
+              <button
+                class="action-button preset-button ${activePreset ? 'active' : ''}"
+                @click="${this._togglePresetMenu}"
+                ?disabled=${!orderedPresets.length}
+              >
+                <ha-icon icon="${presetIcon}"></ha-icon>
+                <span>${presetLabel}</span>
+                <ha-icon class="chevron" icon="${this._presetMenuOpen ? 'mdi:chevron-up' : 'mdi:chevron-down'}"></ha-icon>
+              </button>
+              ${this._presetMenuOpen && orderedPresets.length ? html`
+                <div class="preset-dropdown">
+                  ${orderedPresets.map(preset => html`
+                    <button
+                      class="preset-option ${currentPreset === preset ? 'active' : ''}"
+                      @click="${e => this._handlePresetSelect(e, preset)}"
+                    >
+                      <ha-icon icon="${this._getPresetIcon(preset)}"></ha-icon>
+                      <span>${this._formatPresetName(preset)}</span>
+                    </button>
+                  `)}
+                </div>
+              ` : ''}
+            </div>
           </div>
         </div>
       </ha-card>
     `;
   }
+  
+  _getOrderedPresets(presets) {
+    const presetOrder = ['away', 'home', 'sleep'];
+    return presetOrder
+      .filter(preset => presets.includes(preset))
+      .concat(presets.filter(preset => !presetOrder.includes(preset)));
+  }
 
+  _togglePower(e) {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
 
+    const entityId = this.config.entity;
+    const climate = this.hass.states[entityId];
+
+    if (!climate) {
+      console.log('Climate entity not found:', entityId);
+      return;
+    }
+
+    const availableModes = climate.attributes.hvac_modes || [];
+
+    if (climate.state === 'off') {
+      const preferredMode = availableModes.includes('heat')
+        ? 'heat'
+        : availableModes.find(mode => mode !== 'off');
+
+      if (preferredMode) {
+        this.hass.callService('climate', 'set_hvac_mode', {
+          entity_id: entityId,
+          hvac_mode: preferredMode
+        });
+      }
+    } else {
+      this.hass.callService('climate', 'set_hvac_mode', {
+        entity_id: entityId,
+        hvac_mode: 'off'
+      });
+    }
+  }
+
+  _togglePresetMenu(e) {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+
+    if (this._presetMenuOpen) {
+      this._closePresetMenu();
+      return;
+    }
+
+    this._presetMenuOpen = true;
+    document.addEventListener('click', this._handleOutsideClick, true);
+    this.requestUpdate();
+  }
+
+  _handlePresetSelect(e, preset) {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+
+    this._setPreset(preset);
+    this._closePresetMenu();
+  }
+
+  _closePresetMenu() {
+    if (!this._presetMenuOpen) {
+      return;
+    }
+
+    this._presetMenuOpen = false;
+    document.removeEventListener('click', this._handleOutsideClick, true);
+    this.requestUpdate();
+  }
+
+  _handleOutsideClick(e) {
+    if (!this.shadowRoot) {
+      return;
+    }
+
+    const path = e.composedPath ? e.composedPath() : [];
+    const menu = this.shadowRoot.querySelector('.preset-menu');
+
+    if (!menu) {
+      this._closePresetMenu();
+      return;
+    }
+
+    if (!path.includes(menu)) {
+      this._closePresetMenu();
+    }
+  }
+
+  disconnectedCallback() {
+    document.removeEventListener('click', this._handleOutsideClick, true);
+    this._presetMenuOpen = false;
+    super.disconnectedCallback();
+  }
 
   static get styles() {
     return css`
@@ -356,300 +432,268 @@ class AdaptiveThermostatCard extends LitElement {
         --primary-color: var(--primary, var(--paper-item-icon-color));
         --text-primary-color: var(--primary-text-color);
         --secondary-text-color: var(--secondary-text-color);
-        --spacing: 16px;
+        --accent-color: var(--primary-color, #2196f3);
         --card-border-radius: 12px;
-        
+
         border-radius: var(--card-border-radius);
         padding: 0;
         overflow: hidden;
         cursor: pointer;
       }
-      
+
       .card-content {
-        padding: var(--spacing);
-      }
-      
-      .header {
         display: flex;
+        flex-direction: column;
+        gap: 16px;
+        padding: 16px;
+      }
+
+      .top-row {
+        display: flex;
+        align-items: center;
         justify-content: space-between;
-        align-items: center;
-        margin-bottom: var(--spacing);
-        position: relative;
+        gap: 12px;
+        flex-wrap: wrap;
       }
-      
-      .name {
-        font-size: 1.5rem;
-        font-weight: 500;
-        color: var(--text-primary-color);
-      }
-      
-      .status-container {
+
+      .info-block {
         display: flex;
-        align-items: center;
+        flex-direction: column;
+        gap: 4px;
+        min-width: 120px;
       }
-      
+
+      .name {
+        font-size: 1.2rem;
+        font-weight: 600;
+        color: var(--text-primary-color);
+        margin: 0;
+      }
+
       .power-status {
         font-size: 0.9rem;
         font-weight: 500;
-        color: var(--text-primary-color);
+        color: var(--secondary-text-color);
       }
-      
-      /* Main control panel layout */
-      .control-panel {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: var(--spacing);
+
+      .power-status.on {
+        color: var(--accent-color);
       }
-      
-      .current-readings {
-        display: flex;
-        align-items: flex-end;
-        gap: 24px;
-        width: 100%;
-        justify-content: center;
-      }
-      
-      .current-temperature, .humidity {
-        text-align: center;
-      }
-      
-      .current-temperature .value {
-        font-size: 3.5rem;
-        font-weight: 300;
-        line-height: 1;
-      }
-      
-      .current-temperature .unit {
-        font-size: 2.5rem;
-        font-weight: 300;
-        opacity: 0.8;
-      }
-      
-      /* Make humidity match temperature styling */
-      .humidity .value {
-        font-size: 3.5rem;
-        font-weight: 300;
-        line-height: 1;
-      }
-      
-      .humidity .unit {
-        font-size: 2.5rem;
-        font-weight: 300;
-        opacity: 0.8;
-      }
-      
-      /* New control buttons styles */
-      .control-buttons {
-        display: flex;
-        justify-content: space-between;
-        gap: var(--spacing);
-        margin-top: var(--spacing);
-        margin-bottom: var(--spacing);
-      }
-      
-      .control-button {
+
+      .metrics-grid {
         flex: 1;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        padding: 12px;
-        border: none;
-        border-radius: 12px;
-        background: var(--ha-card-background, var(--card-background-color));
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        transition: all 0.3s ease;
-        cursor: pointer;
-      }
-      
-      .control-button span {
-        margin-top: 4px;
-        font-size: 0.9rem;
-      }
-      
-      .control-button ha-icon {
-        --mdc-icon-size: 24px;
-        width: 24px;
-        height: 24px;
-      }
-      
-      .flame-button.active {
-        background-color: #ffab40;
-        color: white;
-      }
-      
-      .flame-button.inactive {
-        background-color: #f5f5f5;
-        color: #9e9e9e;
-      }
-      
-      .power-button.active {
-        background-color: #2196f3;
-        color: white;
-      }
-      
-      .power-button.inactive {
-        background-color: #f5f5f5;
-        color: #9e9e9e;
-      }
-      
-      /* Temperature control row */
-      .temp-control-row {
-        display: flex;
-        justify-content: space-around;
-        align-items: center;
-        margin-bottom: var(--spacing);
-        padding: var(--spacing) 0;
-        background-color: rgba(var(--rgb-primary-color, 0, 134, 196), 0.05);
-        border-radius: 12px;
-      }
-      
-      .target-temperature {
-        text-align: center;
-      }
-      
-      .target-temperature .value {
-        font-size: 2.2rem;
-        font-weight: 400;
-        color: var(--primary-color);
-      }
-      
-      .target-temperature .unit {
-        font-size: 1.6rem;
-        opacity: 0.8;
-      }
-      
-      .temp-button {
-        width: 40px;
-        height: 40px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border: none;
-        background-color: rgba(var(--rgb-primary-color, 0, 134, 196), 0.1);
-        color: var(--primary-color);
-        cursor: pointer;
-        transition: background-color 0.3s;
-      }
-      
-      .temp-button:hover {
-        background-color: rgba(var(--rgb-primary-color, 0, 134, 196), 0.2);
-      }
-      
-      .temp-button ha-icon {
-        --mdc-icon-size: 20px;
-        width: 20px;
-        height: 20px;
-      }
-      
-      .label {
-        font-size: 0.9rem;
-        color: var(--secondary-text-color);
-        margin-top: 4px;
-      }
-      
-      .sensors {
+        min-width: 220px;
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
-        gap: var(--spacing);
-        margin-bottom: var(--spacing);
-      }
-      
-      .sensor {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        text-align: center;
-        background-color: rgba(var(--rgb-primary-color, 0, 134, 196), 0.05);
-        padding: 12px;
-        border-radius: 12px;
-      }
-      
-      .sensor ha-icon {
-        color: var(--primary-color);
-        margin-bottom: 8px;
-        --mdc-icon-size: 24px;
-        width: 24px;
-        height: 24px;
-      }
-      
-      .sensor .value {
-        font-weight: 500;
-        margin-bottom: 4px;
-        color: var(--text-primary-color);
-      }
-      
-      .sensor .label {
-        font-size: 0.85rem;
-        color: var(--secondary-text-color);
-      }
-      
-      .presets {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+        grid-template-columns: repeat(5, minmax(0, 1fr));
         gap: 8px;
-        margin-top: var(--spacing);
       }
-      
-      .preset {
-        min-width: 80px;
-        min-height: 60px;
-        background-color: var(--card-background-color);
-        border: 1px solid rgba(var(--rgb-primary-color, 0, 134, 196), 0.2);
-        border-radius: 8px;
+
+      .metric {
+        min-width: 0;
         padding: 8px;
+        border-radius: 10px;
+        background: rgba(var(--rgb-primary-color, 0, 134, 196), 0.08);
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        cursor: pointer;
-        transition: all 0.3s;
+        gap: 4px;
+        text-align: center;
       }
-      
-      .preset.active {
-        background-color: var(--primary-color, #2196f3);
-        color: white;
-        border-color: var(--primary-color, #2196f3);
-        box-shadow: 0 2px 8px rgba(33, 150, 243, 0.3);
+
+      .metric-label {
+        font-size: 0.7rem;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--secondary-text-color);
       }
-      
-      .preset:hover:not(.active) {
-        background-color: rgba(var(--rgb-primary-color, 0, 134, 196), 0.1);
+
+      .metric-value {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 2px;
+        font-size: 1.2rem;
+        font-weight: 600;
+        color: var(--text-primary-color);
+        white-space: nowrap;
       }
-      
-      .preset ha-icon {
-        margin-bottom: 4px;
-        --mdc-icon-size: 24px;
-        width: 24px;
-        height: 24px;
+
+      .metric-unit {
+        font-size: 0.75rem;
+        font-weight: 500;
+        opacity: 0.7;
+      }
+
+      .target-metric {
+        grid-column: span 2;
+        flex-direction: row;
+        gap: 8px;
+        padding: 8px 12px;
+      }
+
+      .target-value {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        min-width: 0;
+      }
+
+      .metric-control {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        border: 1px solid rgba(var(--rgb-primary-color, 0, 134, 196), 0.3);
+        background: var(--card-background-color);
+        color: var(--primary-color, #2196f3);
         display: flex;
         align-items: center;
         justify-content: center;
+        transition: background 0.2s ease, border-color 0.2s ease;
       }
-      
-      .preset span {
-        font-size: 0.85rem;
+
+      .metric-control:hover {
+        background: rgba(var(--rgb-primary-color, 0, 134, 196), 0.12);
+      }
+
+      .metric-control ha-icon {
+        --mdc-icon-size: 18px;
+      }
+
+      .bottom-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .action-button {
+        flex: 1;
+        min-height: 40px;
+        border-radius: 10px;
+        border: 1px solid rgba(var(--rgb-primary-color, 0, 134, 196), 0.25);
+        background: var(--card-background-color);
+        color: var(--text-primary-color);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        font-size: 0.95rem;
+        font-weight: 600;
+        padding: 8px 12px;
+        transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+      }
+
+      .action-button:hover {
+        border-color: rgba(var(--rgb-primary-color, 0, 134, 196), 0.4);
+        background: rgba(var(--rgb-primary-color, 0, 134, 196), 0.1);
+      }
+
+      .action-button.active {
+        background: var(--primary-color, #2196f3);
+        border-color: var(--primary-color, #2196f3);
+        color: #fff;
+        box-shadow: 0 6px 16px rgba(33, 150, 243, 0.25);
+      }
+
+      .action-button[disabled] {
+        opacity: 0.5;
+        cursor: not-allowed;
+        box-shadow: none;
+      }
+
+      .action-button ha-icon {
+        --mdc-icon-size: 20px;
+      }
+
+      .preset-menu {
+        position: relative;
+        flex: 1;
+      }
+
+      .preset-button {
+        justify-content: space-between;
+      }
+
+      .preset-button .chevron {
+        --mdc-icon-size: 18px;
+      }
+
+      .preset-dropdown {
+        position: absolute;
+        bottom: calc(100% + 6px);
+        left: 0;
+        right: 0;
+        background: var(--card-background-color);
+        border-radius: 10px;
+        border: 1px solid rgba(var(--rgb-primary-color, 0, 134, 196), 0.25);
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+        padding: 6px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        z-index: 2;
+      }
+
+      .preset-option {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        width: 100%;
+        border: none;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--text-primary-color);
+        font-size: 0.9rem;
         font-weight: 500;
-        text-align: center;
+        padding: 8px 10px;
+        transition: background 0.2s ease, color 0.2s ease;
       }
-      
+
+      .preset-option:hover {
+        background: rgba(var(--rgb-primary-color, 0, 134, 196), 0.12);
+      }
+
+      .preset-option.active {
+        background: var(--primary-color, #2196f3);
+        color: #fff;
+      }
+
+      .preset-option ha-icon {
+        --mdc-icon-size: 18px;
+      }
+
       .warning {
         padding: 20px;
         text-align: center;
         color: var(--error-color);
       }
-      
+
       .loading {
         padding: 20px;
         text-align: center;
         color: var(--secondary-text-color);
       }
-      
-      /* Make buttons and interactive elements retain their specific cursors */
+
       button {
         cursor: pointer;
+      }
+
+      @media (max-width: 560px) {
+        .top-row {
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        .metrics-grid {
+          width: 100%;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .target-metric {
+          grid-column: span 2;
+        }
       }
     `;
   }
