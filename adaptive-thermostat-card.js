@@ -1,4 +1,4 @@
-// Version: 2026-10-07-006
+// Version: 2025-10-07-007
 const LitElement = Object.getPrototypeOf(
   customElements.get("ha-panel-lovelace")
 );
@@ -468,19 +468,19 @@ class AdaptiveThermostatCard extends LitElement {
       .metric.inline {
         display: inline-flex;
         align-items: center;
-        gap: 5px;
+        gap: 4px;
         font-size: 1.05rem;
         color: var(--text-primary-color);
         flex: 1;
         justify-content: center;
         white-space: nowrap;
         background: rgba(0, 0, 0, 0.05);
-        padding: 6px 10px;
+        padding: 5px 8px;
         border-radius: 10px;
       }
 
       .metric-icon {
-        --mdc-icon-size: 20px;
+        --mdc-icon-size: 18px;
         color: var(--secondary-text-color);
         flex-shrink: 0;
       }
