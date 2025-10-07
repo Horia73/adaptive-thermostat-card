@@ -450,25 +450,26 @@ class AdaptiveThermostatCard extends LitElement {
 
       .header-row {
         justify-content: flex-start;
+        gap: 8px;
       }
 
       .name {
-        font-size: 1.2rem;
+        font-size: 1rem;
         font-weight: 600;
         color: var(--text-primary-color);
-        margin-right: 12px;
+        margin-right: 8px;
       }
 
       .metric.inline {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
-        font-size: 1.05rem;
+        gap: 4px;
+        font-size: 0.9rem;
         color: var(--text-primary-color);
       }
 
       .metric-icon {
-        --mdc-icon-size: 18px;
+        --mdc-icon-size: 16px;
         color: var(--secondary-text-color);
       }
 
@@ -492,14 +493,14 @@ class AdaptiveThermostatCard extends LitElement {
       }
 
       .metric-control {
-        width: 44px;
+        width: 36px;
         height: 36px;
-        border-radius: 12px;
+        border-radius: 10px;
         border: none;
         background: transparent;
         color: var(--primary-text-color);
-        font-size: 1.4rem;
-        font-weight: 500;
+        font-size: 1.6rem;
+        font-weight: 400;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -514,10 +515,12 @@ class AdaptiveThermostatCard extends LitElement {
       .actions-row {
         width: 100%;
         gap: 10px;
+        display: flex;
       }
 
       .action-button {
-        flex: 1;
+        flex: 1 1 0;
+        min-width: 0;
         min-height: 46px;
         border-radius: 12px;
         border: 1px solid var(--ha-card-border-color, rgba(0, 0, 0, 0.12));
@@ -565,14 +568,15 @@ class AdaptiveThermostatCard extends LitElement {
 
       .preset-menu {
         position: relative;
-        flex: 1;
+        flex: 1 1 0;
         display: flex;
         min-width: 0;
       }
 
       .toggle-button,
       .preset-button {
-        flex: 1;
+        flex: 1 1 0;
+        min-width: 0;
       }
 
       .preset-button {
