@@ -469,13 +469,13 @@ class AdaptiveThermostatCard extends LitElement {
         display: inline-flex;
         align-items: center;
         gap: 4px;
-        font-size: 1.05rem;
+        font-size: 1rem;
         color: var(--text-primary-color);
         flex: 1;
         justify-content: center;
         white-space: nowrap;
         background: rgba(0, 0, 0, 0.05);
-        padding: 5px 8px;
+        padding: 4px 8px;
         border-radius: 10px;
       }
 
@@ -497,7 +497,7 @@ class AdaptiveThermostatCard extends LitElement {
       }
 
       .target-value {
-        font-size: 1.05rem;
+        font-size: 1.1rem;
         font-weight: 400;
         color: var(--text-primary-color);
         flex: 1;
