@@ -8,8 +8,14 @@ class AdaptiveThermostatCard extends LitElement {
   static get properties() {
     return {
       hass: { type: Object },
-      config: { type: Object }
+      config: { type: Object },
+      _presetDropdownOpen: { type: Boolean }
     };
+  }
+
+  constructor() {
+    super();
+    this._presetDropdownOpen = false;
   }
 
   static getConfigElement() {
@@ -95,8 +101,7 @@ class AdaptiveThermostatCard extends LitElement {
     }
   }
 
-  // Rename _togglePower to _turnOff and modify to only turn off
-  _turnOff(e) {
+  _togglePower(e) {
     if (e) {
       e.stopPropagation();
       e.preventDefault();
@@ -106,27 +111,56 @@ class AdaptiveThermostatCard extends LitElement {
     const climate = this.hass.states[entityId];
     
     if (!climate) {
-      console.log("Climate entity not found:", entityId);
       return;
     }
     
-    // No longer check current state - always turn off
-    console.log("Turning off thermostat");
-    this.hass.callService('climate', 'set_hvac_mode', {
-      entity_id: entityId,
-      hvac_mode: 'off'
-    });
+    const currentState = climate.state;
+    
+    if (currentState === 'off') {
+      // Turn on to heat mode
+      const availableModes = climate.attributes.hvac_modes || [];
+      if (availableModes.includes('heat')) {
+        this.hass.callService('climate', 'set_hvac_mode', {
+          entity_id: entityId,
+          hvac_mode: 'heat'
+        });
+      } else if (availableModes.length > 0 && availableModes[0] !== 'off') {
+        this.hass.callService('climate', 'set_hvac_mode', {
+          entity_id: entityId,
+          hvac_mode: availableModes.filter(mode => mode !== 'off')[0]
+        });
+      }
+    } else {
+      // Turn off
+      this.hass.callService('climate', 'set_hvac_mode', {
+        entity_id: entityId,
+        hvac_mode: 'off'
+      });
+    }
   }
 
-  // Handle preset mode changes
-  _setPreset(preset) {
+  _togglePresetDropdown(e) {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    this._presetDropdownOpen = !this._presetDropdownOpen;
+  }
+
+  _setPreset(preset, e) {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    
     const entityId = this.config.entity;
     
-    // Don't turn off for any preset, just set the preset mode
     this.hass.callService('climate', 'set_preset_mode', {
       entity_id: entityId,
       preset_mode: preset
     });
+    
+    this._presetDropdownOpen = false;
   }
 
   _getPresetIcon(preset) {
@@ -233,202 +267,88 @@ class AdaptiveThermostatCard extends LitElement {
     return html`
       <ha-card @click="${this._handleCardClick}">
         <div class="card-content">
-          <div class="header">
-            <div class="name">${name}</div>
-            <div class="status-container">
-              <div class="power-status">
-                ${isOn ? 
-                  html`On ${isHeating ? html`• Heating` : html`• Idle`}` : 
-                  'Off'}
+          <!-- Compact info row with all temps and humidity -->
+          <div class="compact-info-row">
+            ${humiditySensor && humiditySensor.state ? html`
+              <div class="info-item">
+                <div class="info-label">Humidity</div>
+                <div class="info-value">${humiditySensor.state}<span class="unit">%</span></div>
+              </div>
+            ` : ''}
+            
+            <div class="info-item">
+              <div class="info-label">Indoor</div>
+              <div class="info-value">
+                ${currentTemp !== undefined ? html`${currentTemp}<span class="unit">°</span>` : '--°'}
               </div>
             </div>
-          </div>
-          
-          <!-- Main control panel -->
-          <div class="control-panel">
-            <!-- Current temperature and humidity side by side -->
-            <div class="current-readings">
-              <div class="current-temperature">
-                <div class="label">Current</div>
-                <div class="value">
-                  ${currentTemp !== undefined 
-                    ? html`${currentTemp}<span class="unit">°</span>` 
-                    : html`--<span class="unit">°</span>`}
+            
+            <div class="info-item target-item">
+              <button class="compact-temp-btn" @click="${this._decreaseTemperature}">
+                <ha-icon icon="mdi:minus"></ha-icon>
+              </button>
+              <div class="target-display">
+                <div class="info-label">Target</div>
+                <div class="info-value target-value">
+                  ${targetTemp !== undefined ? html`${targetTemp}<span class="unit">°</span>` : '--°'}
                 </div>
               </div>
-              
-              ${humiditySensor && humiditySensor.state ? html`
-                <div class="humidity">
-                  <div class="label">Humidity</div>
-                  <div class="value">
-                    ${humiditySensor.state}<span class="unit">%</span>
+              <button class="compact-temp-btn" @click="${this._increaseTemperature}">
+                <ha-icon icon="mdi:plus"></ha-icon>
+              </button>
+            </div>
+            
+            ${outdoorSensor ? html`
+              <div class="info-item">
+                <div class="info-label">Outdoor</div>
+                <div class="info-value">${outdoorSensor.state}<span class="unit">°</span></div>
+              </div>
+            ` : ''}
+          </div>
+          
+          <!-- Bottom control row with power toggle and preset dropdown -->
+          <div class="control-row">
+            <button 
+              class="control-btn power-btn ${isOn ? 'active' : ''}" 
+              @click="${this._togglePower}"
+            >
+              <ha-icon icon="${isOn ? 'mdi:fire' : 'mdi:power'}"></ha-icon>
+              <span>${isOn ? 'Heat' : 'Off'}</span>
+            </button>
+            
+            ${presets && presets.length > 0 ? html`
+              <div class="preset-container">
+                <button 
+                  class="control-btn preset-btn ${this._presetDropdownOpen ? 'open' : ''}" 
+                  @click="${this._togglePresetDropdown}"
+                >
+                  <ha-icon icon="${this._getPresetIcon(currentPreset || 'none')}"></ha-icon>
+                  <span>${this._formatPresetName(currentPreset || 'Preset')}</span>
+                  <ha-icon class="dropdown-icon" icon="mdi:chevron-${this._presetDropdownOpen ? 'up' : 'down'}"></ha-icon>
+                </button>
+                
+                ${this._presetDropdownOpen ? html`
+                  <div class="preset-dropdown">
+                    ${presets.map(preset => html`
+                      <button 
+                        class="preset-option ${currentPreset === preset ? 'active' : ''}"
+                        @click="${(e) => this._setPreset(preset, e)}"
+                      >
+                        <ha-icon icon="${this._getPresetIcon(preset)}"></ha-icon>
+                        <span>${this._formatPresetName(preset)}</span>
+                      </button>
+                    `)}
                   </div>
-                </div>
-              ` : ''}
-            </div>
-          </div>
-          
-          <!-- Temperature control row -->
-          <div class="temp-control-row">
-            <!-- Temperature down button -->
-            <button class="temp-button" @click="${this._decreaseTemperature}">
-              <ha-icon icon="mdi:minus"></ha-icon>
-            </button>
-            
-            <!-- Target temperature - show even when off -->
-            <div class="target-temperature">
-              <div class="label">Target</div>
-              <div class="value">
-                ${targetTemp !== undefined
-                  ? html`${targetTemp}<span class="unit">°</span>` 
-                  : html`--<span class="unit">°</span>`}
+                ` : ''}
               </div>
-            </div>
-            
-            <!-- Temperature up button -->
-            <button class="temp-button" @click="${this._increaseTemperature}">
-              <ha-icon icon="mdi:plus"></ha-icon>
-            </button>
+            ` : ''}
           </div>
-          
-          <!-- New control buttons layout -->
-          <div class="control-buttons">
-            <!-- Heat flame button (on left) -->
-            <button 
-              class="control-button flame-button ${isOn ? 'active' : 'inactive'}" 
-              @click="${this._toggleHeat}"
-            >
-              <ha-icon icon="mdi:fire"></ha-icon>
-              <span>Heat</span>
-            </button>
-            
-            <!-- Power button (on right) - now calls _turnOff instead of _togglePower -->
-            <button 
-              class="control-button power-button ${isOn ? 'inactive' : 'active'}" 
-              @click="${this._turnOff}"
-            >
-              <ha-icon icon="mdi:power"></ha-icon>
-              <span>Power</span>
-            </button>
-          </div>
-          
-          <!-- Sensors -->
-          ${this._renderSensors(null, outdoorSensor, weatherSensor, motionSensor, doorWindowSensor)}
-          
-          <!-- Presets in specified order: away, home, sleep -->
-          ${presets && presets.length > 0 ? html`
-            <div class="presets">
-              ${this._renderPresets(presets, currentPreset)}
-            </div>
-          ` : ''}
         </div>
       </ha-card>
     `;
   }
 
-  // New method to render presets in the desired order
-  _renderPresets(presets, currentPreset) {
-    // Define the desired preset order
-    const presetOrder = ['away', 'home', 'sleep'];
-    
-    // Filter and sort presets according to the desired order
-    const orderedPresets = presetOrder
-      .filter(preset => presets.includes(preset))
-      .concat(presets.filter(preset => !presetOrder.includes(preset)));
-    
-    return orderedPresets.map(preset => html`
-      <button class="preset ${currentPreset === preset ? 'active' : ''}" 
-              @click="${() => this._setPreset(preset)}">
-        <ha-icon icon="${this._getPresetIcon(preset)}"></ha-icon>
-        <span>${this._formatPresetName(preset)}</span>
-      </button>
-    `);
-  }
 
-  _renderSensors(humiditySensor, outdoorSensor, weatherSensor, motionSensor, doorWindowSensor) {
-    const sensors = [];
-    
-    if (outdoorSensor) {
-      sensors.push({
-        icon: 'mdi:thermometer-auto',
-        label: 'Outdoor',
-        value: `${outdoorSensor.state}°`
-      });
-    }
-    
-    if (weatherSensor) {
-      sensors.push({
-        icon: 'mdi:weather-partly-cloudy',
-        label: 'Weather',
-        value: weatherSensor.state
-      });
-    }
-    
-    if (motionSensor) {
-      const isActive = motionSensor.state === 'on';
-      sensors.push({
-        icon: isActive ? 'mdi:motion-sensor' : 'mdi:motion-sensor-off',
-        label: 'Motion',
-        value: isActive ? 'Active' : 'Clear'
-      });
-    }
-    
-    if (doorWindowSensor) {
-      const isOpen = doorWindowSensor.state === 'on';
-      sensors.push({
-        icon: isOpen ? 'mdi:window-open' : 'mdi:window-closed',
-        label: 'Window',
-        value: isOpen ? 'Open' : 'Closed'
-      });
-    }
-    
-    return sensors.length > 0 ? html`
-      <div class="sensors">
-        ${sensors.map(sensor => html`
-          <div class="sensor">
-            <ha-icon icon="${sensor.icon}"></ha-icon>
-            <div class="value">${sensor.value}</div>
-            <div class="label">${sensor.label}</div>
-          </div>
-        `)}
-      </div>
-    ` : '';
-  }
-
-  // Add new toggle heat function
-  _toggleHeat(e) {
-    if (e) {
-      e.stopPropagation();
-      e.preventDefault();
-    }
-    
-    const entityId = this.config.entity;
-    const climate = this.hass.states[entityId];
-    
-    if (!climate) {
-      console.log("Climate entity not found:", entityId);
-      return;
-    }
-    
-    const currentState = climate.state;
-    
-    if (currentState === 'off') {
-      // Turn on to heat mode
-      const availableModes = climate.attributes.hvac_modes || [];
-      if (availableModes.includes('heat')) {
-        this.hass.callService('climate', 'set_hvac_mode', {
-          entity_id: entityId,
-          hvac_mode: 'heat'
-        });
-      } else if (availableModes.length > 0 && availableModes[0] !== 'off') {
-        // Fall back to first available non-off mode
-        this.hass.callService('climate', 'set_hvac_mode', {
-          entity_id: entityId,
-          hvac_mode: availableModes.filter(mode => mode !== 'off')[0]
-        });
-      }
-    }
-  }
 
   static get styles() {
     return css`
