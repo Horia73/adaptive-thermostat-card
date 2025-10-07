@@ -498,7 +498,7 @@ class AdaptiveThermostatCard extends LitElement {
 
       .target-value {
         font-size: 1.1rem;
-        font-weight: 400;
+        font-weight: 600;
         color: var(--text-primary-color);
         flex: 1;
         text-align: center;
