@@ -202,7 +202,6 @@ class AdaptiveThermostatCard extends LitElement {
 
     const name = this.config.name || climate.attributes.friendly_name || '';
     const isOn = climate.state !== 'off';
-    const isHeating = isOn && climate.attributes.hvac_action === 'heating';
     const currentTemp = climate.attributes.current_temperature;
     const targetTemp = climate.attributes.temperature;
     const currentPreset = climate.attributes.preset_mode;
@@ -225,6 +224,16 @@ class AdaptiveThermostatCard extends LitElement {
     const activePreset = currentPreset && currentPreset !== 'none' ? currentPreset : null;
     const presetLabel = activePreset ? this._formatPresetName(activePreset) : 'Preset';
     const presetIcon = activePreset ? this._getPresetIcon(activePreset) : 'mdi:shape-outline';
+    const indoorDisplay = currentTemp !== undefined ? `${currentTemp}${String(currentTemp).includes('°') ? '' : '°'}` : '--°';
+    const targetDisplay = targetTemp !== undefined ? `${targetTemp}${String(targetTemp).includes('°') ? '' : '°'}` : '--°';
+    const humidityState = humiditySensor ? String(humiditySensor.state) : '';
+    const outdoorState = outdoorSensor ? String(outdoorSensor.state) : '';
+    const humidityDisplay = humidityKnown
+      ? `${humidityState}${humidityState.includes('%') ? '' : '%'}`
+      : '--%';
+    const outdoorDisplay = outdoorKnown
+      ? `${outdoorState}${outdoorState.includes('°') ? '' : '°'}`
+      : '--°';
 
     if (!orderedPresets.length && this._presetMenuOpen) {
       this._presetMenuOpen = false;
@@ -234,57 +243,36 @@ class AdaptiveThermostatCard extends LitElement {
     return html`
       <ha-card @click="${this._handleCardClick}">
         <div class="card-content">
-          <div class="top-row">
-            <div class="info-block">
-              <div class="name">${name}</div>
-              <div class="power-status ${isOn ? 'on' : 'off'}">
-                ${isOn
-                  ? html`<span>${isHeating ? 'Heating' : 'On'}</span>`
-                  : html`<span>Off</span>`}
+          <div class="header-row">
+            <div class="name">${name}</div>
+            <div class="metrics-strip">
+              <div class="metric-box">
+                <ha-icon class="metric-icon" icon="mdi:thermometer"></ha-icon>
+                <span class="metric-value">${indoorDisplay}</span>
               </div>
-            </div>
-            <div class="metrics-grid">
-              <div class="metric">
-                <div class="metric-label">Indoor</div>
-                <div class="metric-value">
-                  ${currentTemp !== undefined
-                    ? html`${currentTemp}<span class="metric-unit">°</span>`
-                    : html`--<span class="metric-unit">°</span>`}
-                </div>
-              </div>
-              <div class="metric target-metric">
+              <div class="metric-box target-box">
                 <button class="metric-control" @click="${this._decreaseTemperature}">
                   <ha-icon icon="mdi:minus"></ha-icon>
                 </button>
-                <div class="target-value">
-                  <div class="metric-label">Target</div>
-                  <div class="metric-value">
-                    ${targetTemp !== undefined
-                      ? html`${targetTemp}<span class="metric-unit">°</span>`
-                      : html`--<span class="metric-unit">°</span>`}
-                  </div>
-                </div>
+                <span class="metric-value">${targetDisplay}</span>
                 <button class="metric-control" @click="${this._increaseTemperature}">
                   <ha-icon icon="mdi:plus"></ha-icon>
                 </button>
               </div>
-              <div class="metric">
-                <div class="metric-label">Humidity</div>
-                <div class="metric-value">
-                  ${humidityKnown
-                    ? html`${humiditySensor.state}<span class="metric-unit">%</span>`
-                    : html`--<span class="metric-unit">%</span>`}
+              ${humiditySensor ? html`
+                <div class="metric-box">
+                  <ha-icon class="metric-icon" icon="mdi:water-percent"></ha-icon>
+                  <span class="metric-value">${humidityDisplay}</span>
                 </div>
-              </div>
-              <div class="metric">
-                <div class="metric-label">Outdoor</div>
-                <div class="metric-value">
-                  ${outdoorKnown
-                    ? html`${outdoorSensor.state}<span class="metric-unit">°</span>`
-                    : html`--<span class="metric-unit">°</span>`}
+              ` : ''}
+              ${outdoorSensor ? html`
+                <div class="metric-box">
+                  <ha-icon class="metric-icon" icon="mdi:weather-partly-cloudy"></ha-icon>
+                  <span class="metric-value">${outdoorDisplay}</span>
                 </div>
-              </div>
+              ` : ''}
             </div>
+            <div class="status-text ${isOn ? 'on' : 'off'}">${isOn ? 'On' : 'Off'}</div>
           </div>
           <div class="bottom-row">
             <button
@@ -292,7 +280,7 @@ class AdaptiveThermostatCard extends LitElement {
               @click="${this._togglePower}"
             >
               <ha-icon icon="${isOn ? 'mdi:fire' : 'mdi:power'}"></ha-icon>
-              <span>${isOn ? (isHeating ? 'Heating' : 'On') : 'Off'}</span>
+              <span>${isOn ? 'On' : 'Off'}</span>
             </button>
             <div class="preset-menu ${this._presetMenuOpen ? 'open' : ''}">
               <button
@@ -448,19 +436,12 @@ class AdaptiveThermostatCard extends LitElement {
         padding: 16px;
       }
 
-      .top-row {
+      .header-row {
         display: flex;
         align-items: center;
-        justify-content: space-between;
         gap: 12px;
+        justify-content: space-between;
         flex-wrap: wrap;
-      }
-
-      .info-block {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-        min-width: 120px;
       }
 
       .name {
@@ -468,132 +449,118 @@ class AdaptiveThermostatCard extends LitElement {
         font-weight: 600;
         color: var(--text-primary-color);
         margin: 0;
+        flex: 0 0 auto;
       }
 
-      .power-status {
-        font-size: 0.9rem;
-        font-weight: 500;
-        color: var(--secondary-text-color);
-      }
-
-      .power-status.on {
-        color: var(--accent-color);
-      }
-
-      .metrics-grid {
-        flex: 1;
-        min-width: 220px;
-        display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
-        gap: 8px;
-      }
-
-      .metric {
-        min-width: 0;
-        padding: 8px;
-        border-radius: 10px;
-        background: rgba(var(--rgb-primary-color, 0, 134, 196), 0.08);
+      .metrics-strip {
+        flex: 1 1 200px;
         display: flex;
-        flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 4px;
-        text-align: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        min-width: 0;
       }
 
-      .metric-label {
-        font-size: 0.7rem;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
+      .metric-box {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        min-height: 36px;
+        border-radius: 12px;
+        background: var(--ha-chip-background-color, rgba(0, 0, 0, 0.04));
+        border: 1px solid var(--ha-card-border-color, rgba(0, 0, 0, 0.08));
+      }
+
+      .metric-icon {
+        --mdc-icon-size: 20px;
         color: var(--secondary-text-color);
       }
 
       .metric-value {
-        display: inline-flex;
-        align-items: baseline;
-        gap: 2px;
-        font-size: 1.2rem;
+        font-size: 1rem;
         font-weight: 600;
         color: var(--text-primary-color);
         white-space: nowrap;
       }
 
-      .metric-unit {
-        font-size: 0.75rem;
-        font-weight: 500;
-        opacity: 0.7;
+      .target-box {
+        padding: 4px 6px;
+        gap: 4px;
       }
 
-      .target-metric {
-        grid-column: span 2;
-        flex-direction: row;
-        gap: 8px;
-        padding: 8px 12px;
-      }
-
-      .target-value {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 2px;
-        min-width: 0;
+      .target-box .metric-value {
+        min-width: 44px;
+        text-align: center;
       }
 
       .metric-control {
-        width: 32px;
-        height: 32px;
+        width: 28px;
+        height: 28px;
         border-radius: 8px;
-        border: 1px solid rgba(var(--rgb-primary-color, 0, 134, 196), 0.3);
+        border: 1px solid var(--ha-card-border-color, rgba(0, 0, 0, 0.12));
         background: var(--card-background-color);
-        color: var(--primary-color, #2196f3);
+        color: var(--secondary-text-color);
         display: flex;
         align-items: center;
         justify-content: center;
-        transition: background 0.2s ease, border-color 0.2s ease;
+        transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
       }
 
       .metric-control:hover {
-        background: rgba(var(--rgb-primary-color, 0, 134, 196), 0.12);
+        background: rgba(0, 0, 0, 0.05);
+        border-color: rgba(0, 0, 0, 0.15);
+        color: var(--primary-color, #2196f3);
       }
 
       .metric-control ha-icon {
-        --mdc-icon-size: 18px;
+        --mdc-icon-size: 16px;
+      }
+
+      .status-text {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: var(--secondary-text-color);
+        flex: 0 0 auto;
+      }
+
+      .status-text.on {
+        color: var(--primary-color, #2196f3);
       }
 
       .bottom-row {
         display: flex;
         align-items: center;
-        justify-content: space-between;
         gap: 12px;
       }
 
       .action-button {
         flex: 1;
-        min-height: 40px;
-        border-radius: 10px;
-        border: 1px solid rgba(var(--rgb-primary-color, 0, 134, 196), 0.25);
+        min-height: 44px;
+        border-radius: 12px;
+        border: 1px solid var(--ha-card-border-color, rgba(0, 0, 0, 0.12));
         background: var(--card-background-color);
-        color: var(--text-primary-color);
-        display: inline-flex;
+        color: var(--primary-text-color);
+        display: flex;
         align-items: center;
         justify-content: center;
         gap: 8px;
         font-size: 0.95rem;
         font-weight: 600;
-        padding: 8px 12px;
-        transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+        padding: 10px 12px;
+        transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
       }
 
       .action-button:hover {
-        border-color: rgba(var(--rgb-primary-color, 0, 134, 196), 0.4);
-        background: rgba(var(--rgb-primary-color, 0, 134, 196), 0.1);
+        border-color: rgba(0, 0, 0, 0.2);
+        background: rgba(0, 0, 0, 0.04);
       }
 
       .action-button.active {
-        background: var(--primary-color, #2196f3);
-        border-color: var(--primary-color, #2196f3);
-        color: #fff;
-        box-shadow: 0 6px 16px rgba(33, 150, 243, 0.25);
+        background: rgba(var(--rgb-primary-color, 33, 150, 243), 0.15);
+        border-color: rgba(var(--rgb-primary-color, 33, 150, 243), 0.4);
+        color: var(--primary-color, #2196f3);
       }
 
       .action-button[disabled] {
@@ -609,9 +576,11 @@ class AdaptiveThermostatCard extends LitElement {
       .preset-menu {
         position: relative;
         flex: 1;
+        display: flex;
       }
 
       .preset-button {
+        width: 100%;
         justify-content: space-between;
       }
 
@@ -626,7 +595,7 @@ class AdaptiveThermostatCard extends LitElement {
         right: 0;
         background: var(--card-background-color);
         border-radius: 10px;
-        border: 1px solid rgba(var(--rgb-primary-color, 0, 134, 196), 0.25);
+        border: 1px solid var(--ha-card-border-color, rgba(0, 0, 0, 0.12));
         box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
         padding: 6px;
         display: flex;
@@ -652,12 +621,12 @@ class AdaptiveThermostatCard extends LitElement {
       }
 
       .preset-option:hover {
-        background: rgba(var(--rgb-primary-color, 0, 134, 196), 0.12);
+        background: rgba(0, 0, 0, 0.06);
       }
 
       .preset-option.active {
-        background: var(--primary-color, #2196f3);
-        color: #fff;
+        background: rgba(var(--rgb-primary-color, 33, 150, 243), 0.15);
+        color: var(--primary-color, #2196f3);
       }
 
       .preset-option ha-icon {
@@ -681,18 +650,16 @@ class AdaptiveThermostatCard extends LitElement {
       }
 
       @media (max-width: 560px) {
-        .top-row {
-          flex-direction: column;
-          align-items: stretch;
+        .header-row {
+          align-items: flex-start;
         }
 
-        .metrics-grid {
-          width: 100%;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
+        .status-text {
+          margin-left: auto;
         }
 
-        .target-metric {
-          grid-column: span 2;
+        .metrics-strip {
+          justify-content: flex-start;
         }
       }
     `;
