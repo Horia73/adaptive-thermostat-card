@@ -245,7 +245,9 @@ class AdaptiveThermostatCard extends LitElement {
       document.removeEventListener('click', this._handleOutsideClick, true);
     }
 
-    const toggleLabel = !isOn ? 'Off' : hvacAction === 'heating' ? 'Heating' : 'Idle';
+    const toggleLabel = !isOn
+      ? 'Off'
+      : `On ${hvacAction === 'heating' ? 'Heating' : 'Idle'}`;
 
     return html`
       <ha-card @click="${this._handleCardClick}">
@@ -431,7 +433,7 @@ class AdaptiveThermostatCard extends LitElement {
 
         border-radius: var(--card-border-radius);
         padding: 0;
-        overflow: hidden;
+        overflow: visible;
         cursor: pointer;
       }
 
@@ -464,17 +466,23 @@ class AdaptiveThermostatCard extends LitElement {
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        font-size: 0.95rem;
+        font-size: 1.1rem;
         color: var(--text-primary-color);
       }
 
       .metric-icon {
-        --mdc-icon-size: 18px;
+        --mdc-icon-size: 20px;
         color: var(--secondary-text-color);
       }
 
       .target-row {
+        width: 100%;
         justify-content: center;
+        align-items: center;
+        background: rgba(0, 0, 0, 0.06);
+        padding: 12px;
+        border-radius: 14px;
+        box-sizing: border-box;
       }
 
       .target-value {
@@ -509,6 +517,7 @@ class AdaptiveThermostatCard extends LitElement {
       }
 
       .actions-row {
+        width: 100%;
         gap: 10px;
       }
 
@@ -563,6 +572,12 @@ class AdaptiveThermostatCard extends LitElement {
         position: relative;
         flex: 1;
         display: flex;
+        min-width: 0;
+      }
+
+      .toggle-button,
+      .preset-button {
+        flex: 1;
       }
 
       .preset-button {
@@ -576,9 +591,10 @@ class AdaptiveThermostatCard extends LitElement {
 
       .preset-dropdown {
         position: absolute;
-        bottom: calc(100% + 6px);
+        top: calc(100% + 6px);
         left: 0;
-        right: 0;
+        right: auto;
+        min-width: 100%;
         background: var(--card-background-color);
         border-radius: 10px;
         border: 1px solid var(--ha-card-border-color, rgba(0, 0, 0, 0.12));
@@ -587,7 +603,7 @@ class AdaptiveThermostatCard extends LitElement {
         display: flex;
         flex-direction: column;
         gap: 4px;
-        z-index: 2;
+        z-index: 5;
       }
 
       .preset-option {
