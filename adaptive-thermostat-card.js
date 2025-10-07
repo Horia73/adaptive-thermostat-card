@@ -203,10 +203,6 @@ class AdaptiveThermostatCard extends LitElement {
     const name = this.config.name || climate.attributes.friendly_name || '';
     const isOn = climate.state !== 'off';
     const hvacAction = climate.attributes.hvac_action;
-    const statusState = !isOn ? 'off' : hvacAction === 'heating' ? 'heating' : 'idle';
-    const statusLabel = !isOn
-      ? 'Off'
-      : `On • ${hvacAction === 'heating' ? 'Heating' : 'Idle'}`;
     const currentTemp = climate.attributes.current_temperature;
     const targetTemp = climate.attributes.temperature;
     const currentPreset = climate.attributes.preset_mode;
@@ -229,6 +225,7 @@ class AdaptiveThermostatCard extends LitElement {
     const orderedPresets = presets.length ? this._getOrderedPresets(presets) : [];
     const activePreset = currentPreset && currentPreset !== 'none' ? currentPreset : null;
     const presetLabel = activePreset ? this._formatPresetName(activePreset) : 'Preset';
+    const presetIcon = activePreset ? this._getPresetIcon(activePreset) : 'mdi:shape-outline';
 
     const formatWithSuffix = (value, suffix) => {
       if (value === undefined || value === null) {
@@ -248,7 +245,7 @@ class AdaptiveThermostatCard extends LitElement {
       document.removeEventListener('click', this._handleOutsideClick, true);
     }
 
-    const toggleLabel = !isOn ? 'Off' : hvacAction === 'heating' ? 'Heating' : 'On';
+    const toggleLabel = !isOn ? 'Off' : hvacAction === 'heating' ? 'Heating' : 'Idle';
 
     return html`
       <ha-card @click="${this._handleCardClick}">
@@ -271,17 +268,13 @@ class AdaptiveThermostatCard extends LitElement {
                 <span>${outdoorDisplay}</span>
               </div>
             ` : ''}
-            <div class="status-text ${statusState}">${statusLabel}</div>
           </div>
 
           <div class="row target-row">
             <button class="metric-control" @click="${this._decreaseTemperature}">
               <ha-icon icon="mdi:minus"></ha-icon>
             </button>
-            <div class="target-value">
-              <span class="target-label">Target</span>
-              <span class="target-reading">${targetDisplay}</span>
-            </div>
+            <div class="target-value">${targetDisplay}</div>
             <button class="metric-control" @click="${this._increaseTemperature}">
               <ha-icon icon="mdi:plus"></ha-icon>
             </button>
@@ -301,6 +294,7 @@ class AdaptiveThermostatCard extends LitElement {
                 @click="${this._togglePresetMenu}"
                 ?disabled=${!orderedPresets.length}
               >
+                <ha-icon class="preset-icon" icon="${presetIcon}"></ha-icon>
                 <span class="preset-label">${presetLabel}</span>
                 <ha-icon class="chevron" icon="${this._presetMenuOpen ? 'mdi:chevron-up' : 'mdi:chevron-down'}"></ha-icon>
               </button>
@@ -311,8 +305,8 @@ class AdaptiveThermostatCard extends LitElement {
                       class="preset-option ${currentPreset === preset ? 'active' : ''}"
                       @click="${e => this._handlePresetSelect(e, preset)}"
                     >
-                      <span>${this._formatPresetName(preset)}</span>
                       <ha-icon icon="${this._getPresetIcon(preset)}"></ha-icon>
+                      <span>${this._formatPresetName(preset)}</span>
                     </button>
                   `)}
                 </div>
@@ -479,48 +473,16 @@ class AdaptiveThermostatCard extends LitElement {
         color: var(--secondary-text-color);
       }
 
-      .status-text {
-        margin-left: auto;
-        font-size: 0.95rem;
-        font-weight: 600;
-        color: var(--secondary-text-color);
-      }
-
-      .status-text.heating {
-        color: rgb(255, 87, 34);
-      }
-
-      .status-text.idle {
-        color: var(--secondary-text-color);
-      }
-
-      .status-text.off {
-        color: var(--secondary-text-color);
-      }
-
       .target-row {
         justify-content: center;
       }
 
       .target-value {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        min-width: 76px;
-        text-align: center;
-      }
-
-      .target-label {
-        font-size: 0.65rem;
-        letter-spacing: 0.05em;
-        text-transform: uppercase;
-        color: var(--secondary-text-color);
-      }
-
-      .target-reading {
         font-size: 2rem;
         font-weight: 600;
         color: var(--text-primary-color);
+        min-width: 76px;
+        text-align: center;
       }
 
       .metric-control {
@@ -592,6 +554,11 @@ class AdaptiveThermostatCard extends LitElement {
         color: var(--primary-color, #2196f3);
       }
 
+      .preset-icon {
+        --mdc-icon-size: 18px;
+        color: var(--secondary-text-color);
+      }
+
       .preset-menu {
         position: relative;
         flex: 1;
@@ -635,7 +602,6 @@ class AdaptiveThermostatCard extends LitElement {
         font-size: 0.9rem;
         font-weight: 500;
         padding: 8px 10px;
-        justify-content: flex-start;
         transition: background 0.2s ease, color 0.2s ease;
       }
 
@@ -649,8 +615,8 @@ class AdaptiveThermostatCard extends LitElement {
       }
 
       .preset-option ha-icon {
-        margin-left: auto;
         --mdc-icon-size: 18px;
+        color: var(--secondary-text-color);
       }
 
       .warning {
