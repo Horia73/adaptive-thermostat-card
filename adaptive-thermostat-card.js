@@ -245,9 +245,10 @@ class AdaptiveThermostatCard extends LitElement {
       document.removeEventListener('click', this._handleOutsideClick, true);
     }
 
+    const statusSeparator = String.fromCharCode(8226);
     const toggleLabel = !isOn
       ? 'Off'
-      : `On ${hvacAction === 'heating' ? 'Heating' : 'Idle'}`;
+      : `On ${statusSeparator} ${hvacAction === 'heating' ? 'Heating' : 'Idle'}`;
 
     return html`
       <ha-card @click="${this._handleCardClick}">
@@ -273,13 +274,9 @@ class AdaptiveThermostatCard extends LitElement {
           </div>
 
           <div class="row target-row">
-            <button class="metric-control" @click="${this._decreaseTemperature}">
-              <ha-icon icon="mdi:minus"></ha-icon>
-            </button>
+            <button class="metric-control" @click="${this._decreaseTemperature}">-</button>
             <div class="target-value">${targetDisplay}</div>
-            <button class="metric-control" @click="${this._increaseTemperature}">
-              <ha-icon icon="mdi:plus"></ha-icon>
-            </button>
+            <button class="metric-control" @click="${this._increaseTemperature}">+</button>
           </div>
 
           <div class="row actions-row">
@@ -466,12 +463,12 @@ class AdaptiveThermostatCard extends LitElement {
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        font-size: 1.1rem;
+        font-size: 1.05rem;
         color: var(--text-primary-color);
       }
 
       .metric-icon {
-        --mdc-icon-size: 20px;
+        --mdc-icon-size: 18px;
         color: var(--secondary-text-color);
       }
 
@@ -479,14 +476,15 @@ class AdaptiveThermostatCard extends LitElement {
         width: 100%;
         justify-content: center;
         align-items: center;
+        gap: 18px;
         background: rgba(0, 0, 0, 0.06);
-        padding: 12px;
-        border-radius: 14px;
+        padding: 10px 18px;
+        border-radius: 18px;
         box-sizing: border-box;
       }
 
       .target-value {
-        font-size: 2rem;
+        font-size: 1.8rem;
         font-weight: 600;
         color: var(--text-primary-color);
         min-width: 76px;
@@ -494,12 +492,14 @@ class AdaptiveThermostatCard extends LitElement {
       }
 
       .metric-control {
-        width: 40px;
-        height: 40px;
+        width: 44px;
+        height: 36px;
         border-radius: 12px;
-        border: 1px solid var(--ha-card-border-color, rgba(0, 0, 0, 0.12));
-        background: var(--card-background-color);
-        color: var(--secondary-text-color);
+        border: none;
+        background: transparent;
+        color: var(--primary-text-color);
+        font-size: 1.4rem;
+        font-weight: 500;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -507,13 +507,8 @@ class AdaptiveThermostatCard extends LitElement {
       }
 
       .metric-control:hover {
-        background: rgba(0, 0, 0, 0.05);
-        border-color: rgba(0, 0, 0, 0.2);
+        background: rgba(0, 0, 0, 0.08);
         color: var(--accent-color);
-      }
-
-      .metric-control ha-icon {
-        --mdc-icon-size: 18px;
       }
 
       .actions-row {
