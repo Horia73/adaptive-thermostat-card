@@ -1,4 +1,4 @@
-// Version: 2025-10-07-006
+// Version: 2026-10-07-006
 const LitElement = Object.getPrototypeOf(
   customElements.get("ha-panel-lovelace")
 );
