@@ -1,4 +1,4 @@
-// Version: 2024-10-07-004
+// Version: 2025-10-07-005
 const LitElement = Object.getPrototypeOf(
   customElements.get("ha-panel-lovelace")
 );
@@ -452,28 +452,34 @@ class AdaptiveThermostatCard extends LitElement {
       }
 
       .header-row {
-        justify-content: flex-start;
+        justify-content: space-between;
         gap: 8px;
+        flex-wrap: nowrap;
       }
 
       .name {
         font-size: 1rem;
         font-weight: 600;
         color: var(--text-primary-color);
-        margin-right: 8px;
+        margin-right: 4px;
+        flex-shrink: 0;
       }
 
       .metric.inline {
         display: inline-flex;
         align-items: center;
-        gap: 4px;
-        font-size: 1rem;
+        gap: 5px;
+        font-size: 1.05rem;
         color: var(--text-primary-color);
+        flex: 1;
+        justify-content: center;
+        white-space: nowrap;
       }
 
       .metric-icon {
-        --mdc-icon-size: 18px;
+        --mdc-icon-size: 20px;
         color: var(--secondary-text-color);
+        flex-shrink: 0;
       }
 
       .target-row {
