@@ -1,4 +1,4 @@
-// Version: 2025-10-07-007
+// Version: 2025-10-07
 const LitElement = Object.getPrototypeOf(
   customElements.get("ha-panel-lovelace")
 );
@@ -239,7 +239,7 @@ class AdaptiveThermostatCard extends LitElement {
     };
 
     const indoorDisplay = formatWithSuffix(currentTemp, '°');
-    const targetDisplay = formatWithSuffix(targetTemp, '°C');
+    const targetDisplay = formatWithSuffix(targetTemp, ' °C');
     const humidityDisplay = humidityKnown ? formatWithSuffix(humiditySensor.state, '%') : '--%';
     const outdoorDisplay = outdoorKnown ? formatWithSuffix(outdoorSensor.state, '°') : '--°';
 
