@@ -519,8 +519,6 @@ class AdaptiveThermostatCard extends LitElement {
       }
 
       .action-button {
-        flex: 1 1 0;
-        min-width: 0;
         min-height: 46px;
         border-radius: 12px;
         border: 1px solid var(--ha-card-border-color, rgba(0, 0, 0, 0.12));
@@ -568,19 +566,20 @@ class AdaptiveThermostatCard extends LitElement {
 
       .preset-menu {
         position: relative;
-        flex: 1 1 0;
+        flex: 1;
         display: flex;
         min-width: 0;
       }
 
-      .toggle-button,
-      .preset-button {
-        flex: 1 1 0;
+      .toggle-button {
+        flex: 1;
         min-width: 0;
       }
 
       .preset-button {
         width: 100%;
+        flex: 1;
+        min-width: 0;
         justify-content: space-between;
       }
 
