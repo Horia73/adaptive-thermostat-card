@@ -1,4 +1,4 @@
-// Version: 2025-10-07-005
+// Version: 2025-10-07-006
 const LitElement = Object.getPrototypeOf(
   customElements.get("ha-panel-lovelace")
 );
@@ -458,7 +458,7 @@ class AdaptiveThermostatCard extends LitElement {
       }
 
       .name {
-        font-size: 1rem;
+        font-size: 1.1rem;
         font-weight: 600;
         color: var(--text-primary-color);
         margin-right: 4px;
@@ -474,6 +474,9 @@ class AdaptiveThermostatCard extends LitElement {
         flex: 1;
         justify-content: center;
         white-space: nowrap;
+        background: rgba(0, 0, 0, 0.05);
+        padding: 6px 10px;
+        border-radius: 10px;
       }
 
       .metric-icon {
@@ -494,8 +497,8 @@ class AdaptiveThermostatCard extends LitElement {
       }
 
       .target-value {
-        font-size: 1.5rem;
-        font-weight: 600;
+        font-size: 1.4rem;
+        font-weight: 400;
         color: var(--text-primary-color);
         flex: 1;
         text-align: center;
