@@ -586,7 +586,7 @@ class AdaptiveThermostatCard extends LitElement {
         transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
       }
 
-      .action-button:hover:not([disabled]) {
+      .action-button:hover:not([disabled]):not(.toggle-button) {
         border-color: rgba(0, 0, 0, 0.2);
         background: rgba(0, 0, 0, 0.04);
       }
