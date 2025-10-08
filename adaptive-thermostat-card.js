@@ -1,4 +1,4 @@
-// Version: 2025-10-07-1234
+// Version: 2025-10-08-0801
 const LitElement = Object.getPrototypeOf(
   customElements.get("ha-panel-lovelace")
 );
@@ -217,6 +217,11 @@ class AdaptiveThermostatCard extends LitElement {
     const outdoorSensor = outdoorSensorId && this.hass.states[outdoorSensorId]
       ? this.hass.states[outdoorSensorId]
       : null;
+    const windowOpen = Boolean(climate.attributes.window_open_detected);
+    const rawWindowAlert = climate.attributes.window_alert;
+    const windowAlert = typeof rawWindowAlert === 'string' && rawWindowAlert.trim().length
+      ? rawWindowAlert.trim()
+      : '';
 
     const humidityKnown = humiditySensor && humiditySensor.state &&
       humiditySensor.state !== 'unknown' && humiditySensor.state !== 'unavailable';
@@ -275,6 +280,13 @@ class AdaptiveThermostatCard extends LitElement {
               </div>
             ` : ''}
           </div>
+
+          ${windowOpen ? html`
+            <div class="row alert-row">
+              <ha-icon icon="mdi:window-open-variant"></ha-icon>
+              <span class="alert-text">${windowAlert || 'Open window detected. Heating paused.'}</span>
+            </div>
+          ` : ''}
 
           <div class="row target-row">
             <button class="metric-control" @click="${this._decreaseTemperature}">-</button>
@@ -483,6 +495,29 @@ class AdaptiveThermostatCard extends LitElement {
         --mdc-icon-size: 18px;
         color: var(--secondary-text-color);
         flex-shrink: 0;
+      }
+
+      .alert-row {
+        width: 100%;
+        background: rgba(255, 152, 0, 0.18);
+        color: var(--warning-color, #f57c00);
+        border-radius: 12px;
+        padding: 8px 12px;
+        gap: 10px;
+        box-sizing: border-box;
+      }
+
+      .alert-row ha-icon {
+        --mdc-icon-size: 20px;
+        color: inherit;
+        flex-shrink: 0;
+      }
+
+      .alert-text {
+        flex: 1;
+        font-weight: 600;
+        font-size: 0.95rem;
+        color: inherit;
       }
 
       .target-row {
