@@ -1,4 +1,4 @@
-// Version: 2025-10-08-0801
+// Version: 2025-10-08-0905
 const LitElement = Object.getPrototypeOf(
   customElements.get("ha-panel-lovelace")
 );
@@ -222,6 +222,10 @@ class AdaptiveThermostatCard extends LitElement {
     const windowAlert = typeof rawWindowAlert === 'string' && rawWindowAlert.trim().length
       ? rawWindowAlert.trim()
       : '';
+    const rawValveError = climate.attributes.valve_error;
+    const valveError = typeof rawValveError === 'string' && rawValveError.trim().length
+      ? rawValveError.trim()
+      : '';
 
     const humidityKnown = humiditySensor && humiditySensor.state &&
       humiditySensor.state !== 'unknown' && humiditySensor.state !== 'unavailable';
@@ -280,6 +284,13 @@ class AdaptiveThermostatCard extends LitElement {
               </div>
             ` : ''}
           </div>
+
+          ${valveError ? html`
+            <div class="row error-row">
+              <ha-icon icon="mdi:alert-circle"></ha-icon>
+              <span class="alert-text">${valveError}</span>
+            </div>
+          ` : ''}
 
           ${windowOpen ? html`
             <div class="row alert-row">
@@ -518,6 +529,22 @@ class AdaptiveThermostatCard extends LitElement {
         font-weight: 600;
         font-size: 0.95rem;
         color: inherit;
+      }
+
+      .error-row {
+        width: 100%;
+        background: rgba(244, 67, 54, 0.18);
+        color: var(--error-color, #d32f2f);
+        border-radius: 12px;
+        padding: 8px 12px;
+        gap: 10px;
+        box-sizing: border-box;
+      }
+
+      .error-row ha-icon {
+        --mdc-icon-size: 20px;
+        color: inherit;
+        flex-shrink: 0;
       }
 
       .target-row {
