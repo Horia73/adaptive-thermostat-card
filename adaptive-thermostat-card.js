@@ -1,4 +1,4 @@
-// Version: 2025-10-08-0905
+// Version: 2025-10-08-0940
 const LitElement = Object.getPrototypeOf(
   customElements.get("ha-panel-lovelace")
 );
@@ -296,6 +296,9 @@ class AdaptiveThermostatCard extends LitElement {
             <div class="row alert-row">
               <ha-icon icon="mdi:window-open-variant"></ha-icon>
               <span class="alert-text">${windowAlert || 'Open window detected. Heating paused.'}</span>
+              <button class="dismiss-button" @click="${this._dismissWindowAlert}">
+                <ha-icon icon="mdi:close"></ha-icon>
+              </button>
             </div>
           ` : ''}
 
@@ -439,6 +442,22 @@ class AdaptiveThermostatCard extends LitElement {
     }
   }
 
+  _dismissWindowAlert(e) {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+
+    const entityId = this.config.entity;
+    if (!entityId) {
+      return;
+    }
+
+    this.hass.callService('adaptive_thermostat', 'dismiss_window_alert', {
+      entity_id: entityId
+    });
+  }
+
   disconnectedCallback() {
     document.removeEventListener('click', this._handleOutsideClick, true);
     this._presetMenuOpen = false;
@@ -529,6 +548,25 @@ class AdaptiveThermostatCard extends LitElement {
         font-weight: 600;
         font-size: 0.95rem;
         color: inherit;
+      }
+
+      .dismiss-button {
+        border: none;
+        background: transparent;
+        color: inherit;
+        padding: 2px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 8px;
+      }
+
+      .dismiss-button ha-icon {
+        --mdc-icon-size: 18px;
+      }
+
+      .dismiss-button:hover {
+        background: rgba(0, 0, 0, 0.08);
       }
 
       .error-row {
