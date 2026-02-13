@@ -9,6 +9,8 @@ class AdaptiveThermostatCard extends LitElement {
   constructor() {
     super();
     this._presetMenuOpen = false;
+    this._pendingTargetTemperature = null;
+    this._pendingTargetTimestamp = 0;
     this._handleOutsideClick = this._handleOutsideClick.bind(this);
   }
 
@@ -39,10 +41,73 @@ class AdaptiveThermostatCard extends LitElement {
       throw new Error('Please specify a climate entity');
     }
     this.config = config;
+    this._pendingTargetTemperature = null;
+    this._pendingTargetTimestamp = 0;
   }
 
-  // Improve temperature changes to be less laggy
-  _increaseTemperature(e) {
+  _syncPendingTargetTemperature(climate) {
+    if (this._pendingTargetTemperature === null) {
+      return;
+    }
+
+    const pendingExpired = Date.now() - this._pendingTargetTimestamp > 3000;
+    const entityTarget = Number(climate?.attributes?.temperature);
+    const targetAcknowledged = Number.isFinite(entityTarget) &&
+      Math.abs(entityTarget - this._pendingTargetTemperature) < 0.0005;
+
+    if (pendingExpired || targetAcknowledged) {
+      this._pendingTargetTemperature = null;
+      this._pendingTargetTimestamp = 0;
+    }
+  }
+
+  _getTemperatureStep(climate) {
+    const entityStep = Number(climate?.attributes?.target_temp_step);
+    return Number.isFinite(entityStep) && entityStep > 0 ? entityStep : 0.1;
+  }
+
+  _getStepDecimals(step) {
+    if (!Number.isFinite(step)) {
+      return 1;
+    }
+    const stepText = String(step);
+    if (!stepText.includes('.')) {
+      return 0;
+    }
+    return stepText.split('.')[1].length;
+  }
+
+  _normalizeTemperature(value, step, minTemp, maxTemp) {
+    const snapped = Math.round(value / step) * step;
+    let clamped = snapped;
+
+    if (Number.isFinite(minTemp)) {
+      clamped = Math.max(minTemp, clamped);
+    }
+    if (Number.isFinite(maxTemp)) {
+      clamped = Math.min(maxTemp, clamped);
+    }
+
+    return Number(clamped.toFixed(this._getStepDecimals(step)));
+  }
+
+  _getEffectiveTargetTemperature(climate) {
+    this._syncPendingTargetTemperature(climate);
+
+    if (this._pendingTargetTemperature !== null) {
+      return this._pendingTargetTemperature;
+    }
+
+    const entityTarget = Number(climate?.attributes?.temperature);
+    if (Number.isFinite(entityTarget)) {
+      return entityTarget;
+    }
+
+    const currentTemp = Number(climate?.attributes?.current_temperature);
+    return Number.isFinite(currentTemp) ? currentTemp : 20;
+  }
+
+  _adjustTemperature(direction, e) {
     if (e) {
       e.stopPropagation();
       e.preventDefault();
@@ -50,66 +115,49 @@ class AdaptiveThermostatCard extends LitElement {
 
     const entityId = this.config.entity;
     const climate = this.hass.states[entityId];
-    
-    // If climate has no temperature attribute, set a default
-    let currentTemp = climate.attributes.temperature;
-    if (currentTemp === undefined) {
-      currentTemp = climate.attributes.current_temperature || 20;
+    if (!climate) {
+      return;
     }
-    
-    const increment = 0.1;
-    const newTemp = currentTemp + increment;
-    
-    // If climate is on, use standard service call
-    if (climate.state !== 'off') {
-      this.hass.callService('climate', 'set_temperature', {
-        entity_id: entityId,
-        temperature: newTemp
-      });
-    } else {
-      // If climate is off, update temperature attribute directly
-      this.hass.callService('climate', 'set_temperature', {
-        entity_id: entityId,
-        temperature: newTemp
-      });
-      // The above still works for many climate integrations even when off
-      // The key is NOT calling set_hvac_mode which would turn it on
+
+    const step = this._getTemperatureStep(climate);
+    const minTemp = Number(climate.attributes.min_temp);
+    const maxTemp = Number(climate.attributes.max_temp);
+    const currentTemp = this._getEffectiveTargetTemperature(climate);
+    const nextTemp = this._normalizeTemperature(
+      currentTemp + (direction * step),
+      step,
+      minTemp,
+      maxTemp
+    );
+
+    if (Math.abs(nextTemp - currentTemp) < 0.0005) {
+      return;
     }
+
+    this._pendingTargetTemperature = nextTemp;
+    this._pendingTargetTimestamp = Date.now();
+    this.requestUpdate();
+
+    const call = this.hass.callService('climate', 'set_temperature', {
+      entity_id: entityId,
+      temperature: nextTemp
+    });
+
+    if (call && typeof call.catch === 'function') {
+      call.catch(() => {
+        this._pendingTargetTemperature = null;
+        this._pendingTargetTimestamp = 0;
+        this.requestUpdate();
+      });
+    }
+  }
+
+  _increaseTemperature(e) {
+    this._adjustTemperature(1, e);
   }
 
   _decreaseTemperature(e) {
-    if (e) {
-      e.stopPropagation();
-      e.preventDefault();
-    }
-
-    const entityId = this.config.entity;
-    const climate = this.hass.states[entityId];
-    
-    // If climate has no temperature attribute, set a default
-    let currentTemp = climate.attributes.temperature;
-    if (currentTemp === undefined) {
-      currentTemp = climate.attributes.current_temperature || 20;
-    }
-    
-    const decrement = 0.1;
-    const newTemp = currentTemp - decrement;
-    
-    // If climate is on, use standard service call
-    if (climate.state !== 'off') {
-      this.hass.callService('climate', 'set_temperature', {
-        entity_id: entityId,
-        temperature: newTemp
-      });
-    } else {
-      // If climate is off, update temperature attribute directly
-      this.hass.callService('climate', 'set_temperature', {
-        entity_id: entityId,
-        temperature: newTemp
-      });
-      // The above still works for many climate integrations even when off
-      // The key is NOT calling set_hvac_mode which would turn it on
-    }
+    this._adjustTemperature(-1, e);
   }
 
   // Handle preset mode changes
@@ -171,7 +219,11 @@ class AdaptiveThermostatCard extends LitElement {
       '.preset-option'
     ];
 
-    if (interactiveSelectors.some(selector => e.target.closest(selector))) {
+    const clickTarget = e.target;
+    if (
+      clickTarget instanceof Element &&
+      interactiveSelectors.some(selector => clickTarget.closest(selector))
+    ) {
       return;
     }
 
@@ -205,7 +257,7 @@ class AdaptiveThermostatCard extends LitElement {
     const isOn = climate.state !== 'off';
     const hvacAction = climate.attributes.hvac_action;
     const currentTemp = climate.attributes.current_temperature;
-    const targetTemp = climate.attributes.temperature;
+    const targetTemp = this._getEffectiveTargetTemperature(climate);
     const currentPreset = climate.attributes.preset_mode;
     const presets = climate.attributes.preset_modes || [];
 
