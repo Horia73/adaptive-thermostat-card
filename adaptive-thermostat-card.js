@@ -1,9 +1,10 @@
-// Version: 2025-10-08-0940
+// Version: 2026-04-07-1430
 const LitElement = Object.getPrototypeOf(
   customElements.get("ha-panel-lovelace")
 );
 const html = LitElement.prototype.html;
 const css = LitElement.prototype.css;
+const PENDING_TARGET_TIMEOUT_MS = 15000;
 
 class AdaptiveThermostatCard extends LitElement {
   constructor() {
@@ -11,6 +12,7 @@ class AdaptiveThermostatCard extends LitElement {
     this._presetMenuOpen = false;
     this._pendingTargetTemperature = null;
     this._pendingTargetTimestamp = 0;
+    this._lastKnownTargetTemperature = null;
     this._handleOutsideClick = this._handleOutsideClick.bind(this);
   }
 
@@ -43,6 +45,17 @@ class AdaptiveThermostatCard extends LitElement {
     this.config = config;
     this._pendingTargetTemperature = null;
     this._pendingTargetTimestamp = 0;
+    this._lastKnownTargetTemperature = null;
+  }
+
+  _getEntityTargetTemperature(climate) {
+    const entityTarget = Number(climate?.attributes?.temperature);
+    if (Number.isFinite(entityTarget)) {
+      this._lastKnownTargetTemperature = entityTarget;
+      return entityTarget;
+    }
+
+    return null;
   }
 
   _syncPendingTargetTemperature(climate) {
@@ -50,8 +63,8 @@ class AdaptiveThermostatCard extends LitElement {
       return;
     }
 
-    const pendingExpired = Date.now() - this._pendingTargetTimestamp > 3000;
-    const entityTarget = Number(climate?.attributes?.temperature);
+    const pendingExpired = Date.now() - this._pendingTargetTimestamp > PENDING_TARGET_TIMEOUT_MS;
+    const entityTarget = this._getEntityTargetTemperature(climate);
     const targetAcknowledged = Number.isFinite(entityTarget) &&
       Math.abs(entityTarget - this._pendingTargetTemperature) < 0.0005;
 
@@ -98,9 +111,13 @@ class AdaptiveThermostatCard extends LitElement {
       return this._pendingTargetTemperature;
     }
 
-    const entityTarget = Number(climate?.attributes?.temperature);
+    const entityTarget = this._getEntityTargetTemperature(climate);
     if (Number.isFinite(entityTarget)) {
       return entityTarget;
+    }
+
+    if (Number.isFinite(this._lastKnownTargetTemperature)) {
+      return this._lastKnownTargetTemperature;
     }
 
     const currentTemp = Number(climate?.attributes?.current_temperature);
