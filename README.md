@@ -9,6 +9,19 @@ This is the Lovelace card for the [Adaptive Thermostat integration](https://gith
   target temperature, and humidity on a single graph (dual °C / % axes, hover readout,
   12h / 24h / 3d ranges). Humidity is read from the climate entity's `humidity_sensor`
   attribute, so it appears automatically when a humidity sensor is configured.
+- Responsive controls while Home Assistant is busy:
+  - Rapid **+ / −** taps update the displayed target instantly but send a single
+    `climate.set_temperature` with the final value ~0.7 s after the last tap. The
+    display keeps the pending value until HA reports it (or 15 s pass), so slow or
+    stale updates don't make it jump back.
+  - **Power** and **preset** changes show immediately with a pulsing *pending* style
+    (“Turning on…”), ignore repeated taps until HA confirms (or 15 s pass), and revert
+    with a short error message if the service call fails.
+- Alert rows: window open (with dismiss), valve error (`valve_error`), and a **fault**
+  row driven by the integration's `fault` (`sensor_stale`, `sensor_unavailable`,
+  `valve_mismatch`, `valve_unavailable`, `central_unavailable`) and `fault_message`
+  attributes. Older integration versions without these attributes simply show no
+  fault row.
 
 Heating start/stop also shows up in the entity's **Activity** (logbook) feed — this is
 provided by the integration (v1.1.6+), not the card.
