@@ -1,0 +1,199 @@
+<!doctype html>
+<!--
+  Dev-only test harness for adaptive-thermostat-card.js (not used by HACS).
+  Serve the repo root over HTTP (e.g. `python3 -m http.server 8765` from the repo root) and open
+  /dev/harness.html. Query params: ?theme=dark
+  Drive the mock from the console via `window.mock` (see bottom of this file).
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Adaptive Thermostat Card – dev harness</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css">
+  <style>
+    body {
+      margin: 0;
+      padding: 16px;
+      font-family: Roboto, system-ui, sans-serif;
+      background: var(--primary-background-color);
+      color: var(--primary-text-color);
+      --primary-color: #03a9f4;
+      --rgb-primary-color: 3, 169, 244;
+      --error-color: #db4437;
+      --warning-color: #ffa600;
+    }
+    body.light {
+      --primary-background-color: #fafafa;
+      --card-background-color: #ffffff;
+      --primary-text-color: #212121;
+      --secondary-text-color: #727272;
+      --divider-color: rgba(0, 0, 0, 0.12);
+    }
+    body.dark {
+      color-scheme: dark;
+      --primary-background-color: #111111;
+      --card-background-color: #1c1c1c;
+      --primary-text-color: #e1e1e1;
+      --secondary-text-color: #9b9b9b;
+      --divider-color: rgba(225, 225, 225, 0.12);
+      --ha-card-border-color: rgba(225, 225, 225, 0.12);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 16px;
+      align-items: start;
+    }
+    .label { font-size: 12px; color: var(--secondary-text-color); margin: 0 0 4px 4px; }
+  </style>
+</head>
+<body class="light">
+  <div class="grid" id="grid"></div>
+  <script type="module">
+    import { LitElement, html, css } from 'https://cdn.jsdelivr.net/npm/lit@3.3.1/+esm';
+
+    const params = new URLSearchParams(location.search);
+    document.body.className = params.get('theme') === 'dark' ? 'dark' : 'light';
+
+    // The card does Object.getPrototypeOf(customElements.get('ha-panel-lovelace'))
+    // and reads html/css off that prototype, like inside Home Assistant.
+    class FakeHaLitBase extends LitElement {}
+    FakeHaLitBase.prototype.html = html;
+    FakeHaLitBase.prototype.css = css;
+    customElements.define('ha-panel-lovelace', class extends FakeHaLitBase {});
+
+    customElements.define('ha-card', class extends HTMLElement {
+      constructor() {
+        super();
+        this.attachShadow({ mode: 'open' }).innerHTML = `
+          <style>:host{display:block;background:var(--card-background-color);color:var(--primary-text-color);
+          border-radius:12px;box-shadow:0 2px 2px rgba(0,0,0,.14),0 1px 5px rgba(0,0,0,.12);
+          border:1px solid var(--ha-card-border-color,var(--divider-color,#e0e0e0))}</style><slot></slot>`;
+      }
+    });
+
+    customElements.define('ha-icon', class extends HTMLElement {
+      static get observedAttributes() { return ['icon']; }
+      constructor() {
+        super();
+        this.attachShadow({ mode: 'open' }).innerHTML = `
+          <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css">
+          <style>:host{display:inline-flex;width:var(--mdc-icon-size,24px);height:var(--mdc-icon-size,24px);
+          align-items:center;justify-content:center;vertical-align:middle}
+          i{font-size:var(--mdc-icon-size,24px);line-height:1}</style><i></i>`;
+      }
+      set icon(v) { this.setAttribute('icon', v); }
+      attributeChangedCallback() {
+        const name = (this.getAttribute('icon') || '').replace('mdi:', '');
+        this.shadowRoot.querySelector('i').className = `mdi mdi-${name}`;
+      }
+    });
+
+    // ---- mock hass ----
+    const now = () => new Date().toISOString();
+    const mk = (entity_id, state, attributes) => ({ entity_id, state, attributes, last_updated: now(), last_changed: now() });
+    const baseClimate = {
+      hvac_modes: ['off', 'heat'], min_temp: 5, max_temp: 30, target_temp_step: 0.1,
+      current_temperature: 22.4, temperature: 24.1, hvac_action: 'heating',
+      preset_modes: ['none', 'home', 'away', 'sleep'], preset_mode: 'home',
+      humidity_sensor: 'sensor.humidity', outdoor_sensor: 'sensor.outdoor'
+    };
+
+    const mock = window.mock = {
+      latencyMs: 300,      // callService resolve/reject delay
+      applyDelayMs: 150,   // delay after resolve before the state update is pushed
+      fail: false,         // reject every callService
+      apply: true,         // push state updates for successful calls
+      historyFail: false,
+      calls: [],
+      states: {
+        'climate.dressing': mk('climate.dressing', 'heat', { ...baseClimate, friendly_name: 'Dressing', fault: null, fault_message: null }),
+        'climate.living': mk('climate.living', 'heat', { ...baseClimate, friendly_name: 'Living', temperature: 21.5,
+          fault: 'sensor_stale', fault_message: 'Living sensor has not reported for 32 min. Heating paused.' }),
+        'climate.bedroom': mk('climate.bedroom', 'off', { ...baseClimate, friendly_name: 'Bedroom', temperature: 19,
+          hvac_action: 'off', preset_mode: 'sleep', window_open_detected: true,
+          valve_error: 'Valve TRV-2 not responding' }),
+        'sensor.humidity': mk('sensor.humidity', '48', { unit_of_measurement: '%' }),
+        'sensor.outdoor': mk('sensor.outdoor', '7.5', { unit_of_measurement: '°C' })
+      },
+      setState(entityId, patch = {}, attrPatch = {}) {
+        const old = this.states[entityId];
+        this.states = { ...this.states, [entityId]: { ...old, ...patch, attributes: { ...old.attributes, ...attrPatch }, last_updated: now() } };
+        this.push();
+      },
+      push() {
+        const hass = buildHass();
+        document.querySelectorAll('adaptive-thermostat-card').forEach(c => { c.hass = hass; });
+      },
+      reset() { this.calls = []; }
+    };
+
+    function applyService(domain, service, data) {
+      const id = data.entity_id;
+      if (service === 'set_temperature') mock.setState(id, {}, { temperature: data.temperature });
+      if (service === 'set_hvac_mode') mock.setState(id, { state: data.hvac_mode }, { hvac_action: data.hvac_mode === 'off' ? 'off' : 'heating' });
+      if (service === 'set_preset_mode') mock.setState(id, {}, { preset_mode: data.preset_mode });
+      if (service === 'dismiss_window_alert') mock.setState(id, {}, { window_open_detected: false });
+    }
+
+    function buildHass() {
+      return {
+        states: mock.states,
+        themes: { darkMode: document.body.classList.contains('dark') },
+        callService(domain, service, data) {
+          mock.calls.push({ t: Math.round(performance.now()), domain, service, data });
+          return new Promise((resolve, reject) => setTimeout(() => {
+            if (mock.fail) {
+              reject({ code: 'home_assistant_error', message: 'mock failure' });
+              return;
+            }
+            resolve({ context: {} });
+            if (mock.apply) setTimeout(() => applyService(domain, service, data), mock.applyDelayMs);
+          }, mock.latencyMs));
+        },
+        callWS(msg) {
+          return new Promise((resolve, reject) => setTimeout(() => {
+            if (mock.historyFail) { reject({ code: 'unknown_error', message: 'History request failed (mock)' }); return; }
+            const end = Date.now() / 1000;
+            const start = end - 24 * 3600;
+            const out = {};
+            for (const id of msg.entity_ids) {
+              const pts = [];
+              for (let t = start, i = 0; t <= end; t += 900, i++) {
+                if (id.startsWith('climate.')) {
+                  pts.push({ s: 'heat', lu: t, a: { current_temperature: +(21 + Math.sin(i / 8) * 1.2).toFixed(1), temperature: i % 40 < 20 ? 22 : 24.1 } });
+                } else {
+                  pts.push({ s: String(Math.round(48 + Math.cos(i / 10) * 6)), lu: t });
+                }
+              }
+              out[id] = pts;
+            }
+            resolve(out);
+          }, 200));
+        }
+      };
+    }
+
+    await import('../adaptive-thermostat-card.js');
+
+    const grid = document.getElementById('grid');
+    for (const [entity, label] of [
+      ['climate.dressing', 'new integration, no fault'],
+      ['climate.living', 'new integration, fault=sensor_stale'],
+      ['climate.bedroom', 'old integration (no fault attrs), valve_error + window']
+    ]) {
+      const wrap = document.createElement('div');
+      wrap.innerHTML = `<div class="label">${label}</div>`;
+      const card = document.createElement('adaptive-thermostat-card');
+      card.id = entity.split('.')[1];
+      card.setConfig({ entity });
+      card.hass = buildHass();
+      wrap.appendChild(card);
+      grid.appendChild(wrap);
+    }
+    window.addEventListener('hass-more-info', e => { mock.moreInfo = (mock.moreInfo || 0) + 1; });
+    window.harnessReady = true;
+  </script>
+</body>
+</html>

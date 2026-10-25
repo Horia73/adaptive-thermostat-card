@@ -1,10 +1,22 @@
-// Version: 2026-06-24-1200
+// Version: 2026-10-25-1500
 const LitElement = Object.getPrototypeOf(
   customElements.get("ha-panel-lovelace")
 );
 const html = LitElement.prototype.html;
 const css = LitElement.prototype.css;
 const PENDING_TARGET_TIMEOUT_MS = 15000;
+// +/- taps only update the display; one set_temperature is sent after this idle time.
+const TARGET_DEBOUNCE_MS = 700;
+// Optimistic power/preset state is dropped after this if HA never reports it.
+const PENDING_ACTION_TIMEOUT_MS = 15000;
+const ACTION_ERROR_DISPLAY_MS = 5000;
+const FAULT_DETAILS = {
+  sensor_stale: { icon: 'mdi:thermometer-alert', message: 'Temperature sensor is not reporting.' },
+  sensor_unavailable: { icon: 'mdi:thermometer-off', message: 'Temperature sensor is unavailable.' },
+  valve_mismatch: { icon: 'mdi:valve', message: 'Valve is not following the requested position.' },
+  valve_unavailable: { icon: 'mdi:valve-closed', message: 'Valve is unavailable.' },
+  central_unavailable: { icon: 'mdi:fire-off', message: 'Central heating is unavailable.' }
+};
 
 class AdaptiveThermostatCard extends LitElement {
   constructor() {
@@ -15,6 +27,17 @@ class AdaptiveThermostatCard extends LitElement {
     this._lastKnownTargetTemperature = null;
     this._historyOpen = false;
     this._historyHours = 24;
+    this._targetDebounceTimer = null;
+    this._targetDebounceEntity = null;
+    this._targetCallsInFlight = 0;
+    this._targetCallSeq = 0;
+    this._pendingTargetSentState = null;
+    this._pendingHvacMode = null;
+    this._pendingPreset = null;
+    this._pendingExpiryTimer = null;
+    this._actionError = '';
+    this._actionErrorTimer = null;
+    this._suppressCardClick = false;
     this._handleOutsideClick = this._handleOutsideClick.bind(this);
   }
 
@@ -44,10 +67,41 @@ class AdaptiveThermostatCard extends LitElement {
     if (!config.entity || !config.entity.startsWith('climate.')) {
       throw new Error('Please specify a climate entity');
     }
+    if (this.config && this.config.entity !== config.entity) {
+      // A queued +/- belongs to the previous entity; send it rather than drop it.
+      this._flushTargetTemperature();
+    }
     this.config = config;
+    this._clearPendingTarget();
+    this._pendingHvacMode = null;
+    this._pendingPreset = null;
+    this._lastKnownTargetTemperature = null;
+  }
+
+  // Always returns a promise, even if callService throws or returns nothing.
+  _callService(domain, service, data) {
+    try {
+      return Promise.resolve(this.hass.callService(domain, service, data));
+    } catch (err) {
+      return Promise.reject(err);
+    }
+  }
+
+  _showActionError(message) {
+    this._actionError = message;
+    clearTimeout(this._actionErrorTimer);
+    this._actionErrorTimer = setTimeout(() => {
+      this._actionError = '';
+      this._actionErrorTimer = null;
+      this.requestUpdate();
+    }, ACTION_ERROR_DISPLAY_MS);
+    this.requestUpdate();
+  }
+
+  _clearPendingTarget() {
     this._pendingTargetTemperature = null;
     this._pendingTargetTimestamp = 0;
-    this._lastKnownTargetTemperature = null;
+    this._pendingTargetSentState = null;
   }
 
   _getEntityTargetTemperature(climate) {
@@ -67,12 +121,25 @@ class AdaptiveThermostatCard extends LitElement {
 
     const pendingExpired = Date.now() - this._pendingTargetTimestamp > PENDING_TARGET_TIMEOUT_MS;
     const entityTarget = this._getEntityTargetTemperature(climate);
-    const targetAcknowledged = Number.isFinite(entityTarget) &&
+
+    if (pendingExpired) {
+      this._clearPendingTarget();
+      return;
+    }
+
+    // Still collecting taps or waiting on a call: any server value is stale.
+    if (this._targetDebounceTimer !== null || this._targetCallsInFlight > 0) {
+      return;
+    }
+
+    // Only a state update newer than the one seen when the call was sent counts,
+    // so an old value that happens to equal the pending one cannot ack it early.
+    const freshState = climate !== this._pendingTargetSentState;
+    const targetAcknowledged = freshState && Number.isFinite(entityTarget) &&
       Math.abs(entityTarget - this._pendingTargetTemperature) < 0.0005;
 
-    if (pendingExpired || targetAcknowledged) {
-      this._pendingTargetTemperature = null;
-      this._pendingTargetTimestamp = 0;
+    if (targetAcknowledged) {
+      this._clearPendingTarget();
     }
   }
 
@@ -155,20 +222,54 @@ class AdaptiveThermostatCard extends LitElement {
 
     this._pendingTargetTemperature = nextTemp;
     this._pendingTargetTimestamp = Date.now();
+    this._targetDebounceEntity = entityId;
+    clearTimeout(this._targetDebounceTimer);
+    this._targetDebounceTimer = setTimeout(() => this._flushTargetTemperature(), TARGET_DEBOUNCE_MS);
     this.requestUpdate();
+  }
 
-    const call = this.hass.callService('climate', 'set_temperature', {
-      entity_id: entityId,
-      temperature: nextTemp
-    });
-
-    if (call && typeof call.catch === 'function') {
-      call.catch(() => {
-        this._pendingTargetTemperature = null;
-        this._pendingTargetTimestamp = 0;
-        this.requestUpdate();
-      });
+  _flushTargetTemperature() {
+    if (this._targetDebounceTimer === null) {
+      return;
     }
+    clearTimeout(this._targetDebounceTimer);
+    this._targetDebounceTimer = null;
+
+    const entityId = this._targetDebounceEntity;
+    const temperature = this._pendingTargetTemperature;
+    this._targetDebounceEntity = null;
+    if (!this.hass || !entityId || temperature === null) {
+      return;
+    }
+
+    const climate = this.hass.states[entityId];
+    const entityTarget = Number(climate?.attributes?.temperature);
+    if (this._targetCallsInFlight === 0 && Number.isFinite(entityTarget) &&
+        Math.abs(entityTarget - temperature) < 0.0005) {
+      // Tapped back to the value HA already has; nothing to send.
+      this._clearPendingTarget();
+      this.requestUpdate();
+      return;
+    }
+
+    const seq = ++this._targetCallSeq;
+    this._targetCallsInFlight += 1;
+    this._pendingTargetTimestamp = Date.now();
+    this._pendingTargetSentState = climate;
+
+    this._callService('climate', 'set_temperature', {
+      entity_id: entityId,
+      temperature
+    }).catch(() => {
+      // Only revert if no newer value was queued or sent after this one.
+      if (seq === this._targetCallSeq && this._targetDebounceTimer === null) {
+        this._clearPendingTarget();
+        this._showActionError('Could not set the target temperature.');
+      }
+    }).finally(() => {
+      this._targetCallsInFlight -= 1;
+      this.requestUpdate();
+    });
   }
 
   _increaseTemperature(e) {
@@ -182,12 +283,73 @@ class AdaptiveThermostatCard extends LitElement {
   // Handle preset mode changes
   _setPreset(preset) {
     const entityId = this.config.entity;
-    
+    const pending = { preset, timestamp: Date.now() };
+    this._pendingPreset = pending;
+    this.requestUpdate();
+
     // Don't turn off for any preset, just set the preset mode
-    this.hass.callService('climate', 'set_preset_mode', {
+    this._callService('climate', 'set_preset_mode', {
       entity_id: entityId,
       preset_mode: preset
+    }).catch(() => {
+      if (this._pendingPreset === pending) {
+        this._pendingPreset = null;
+      }
+      this._showActionError(`Could not switch to ${this._formatPresetName(preset)}.`);
     });
+  }
+
+  _isPendingExpired(pending) {
+    return Date.now() - pending.timestamp > PENDING_ACTION_TIMEOUT_MS;
+  }
+
+  _getEffectivePreset(climate) {
+    const pending = this._pendingPreset;
+    if (pending && (this._isPendingExpired(pending) || climate.attributes.preset_mode === pending.preset)) {
+      this._pendingPreset = null;
+    }
+    return this._pendingPreset ? this._pendingPreset.preset : climate.attributes.preset_mode;
+  }
+
+  _getEffectiveIsOn(climate) {
+    const pending = this._pendingHvacMode;
+    if (pending && (this._isPendingExpired(pending) ||
+        (climate.state === 'off') === (pending.mode === 'off'))) {
+      this._pendingHvacMode = null;
+    }
+    return this._pendingHvacMode ? this._pendingHvacMode.mode !== 'off' : climate.state !== 'off';
+  }
+
+  // Pending values are otherwise only re-checked on hass updates; make sure an
+  // unanswered one still times out on screen.
+  _armPendingExpiryTimer() {
+    clearTimeout(this._pendingExpiryTimer);
+    this._pendingExpiryTimer = null;
+
+    const deadlines = [];
+    if (this._pendingTargetTemperature !== null) {
+      deadlines.push(this._pendingTargetTimestamp + PENDING_TARGET_TIMEOUT_MS);
+    }
+    if (this._pendingHvacMode) {
+      deadlines.push(this._pendingHvacMode.timestamp + PENDING_ACTION_TIMEOUT_MS);
+    }
+    if (this._pendingPreset) {
+      deadlines.push(this._pendingPreset.timestamp + PENDING_ACTION_TIMEOUT_MS);
+    }
+    if (!deadlines.length) {
+      return;
+    }
+
+    const delay = Math.max(0, Math.min(...deadlines) - Date.now()) + 50;
+    this._pendingExpiryTimer = setTimeout(() => {
+      this._pendingExpiryTimer = null;
+      this.requestUpdate();
+    }, delay);
+  }
+
+  updated(changed) {
+    super.updated(changed);
+    this._armPendingExpiryTimer();
   }
 
   _getPresetIcon(preset) {
@@ -228,6 +390,12 @@ class AdaptiveThermostatCard extends LitElement {
   }
 
   _handleCardClick(e) {
+    if (this._suppressCardClick) {
+      // This click only dismissed the preset menu.
+      this._suppressCardClick = false;
+      return;
+    }
+
     const interactiveSelectors = [
       'button',
       'ha-icon',
@@ -274,11 +442,13 @@ class AdaptiveThermostatCard extends LitElement {
     }
 
     const name = this.config.name || climate.attributes.friendly_name || '';
-    const isOn = climate.state !== 'off';
+    const isOn = this._getEffectiveIsOn(climate);
+    const powerPending = Boolean(this._pendingHvacMode);
     const hvacAction = climate.attributes.hvac_action;
     const currentTemp = climate.attributes.current_temperature;
     const targetTemp = this._getEffectiveTargetTemperature(climate);
-    const currentPreset = climate.attributes.preset_mode;
+    const currentPreset = this._getEffectivePreset(climate);
+    const presetPending = Boolean(this._pendingPreset);
     const presets = climate.attributes.preset_modes || [];
 
     const humiditySensorId = climate.attributes.humidity_sensor;
@@ -298,6 +468,17 @@ class AdaptiveThermostatCard extends LitElement {
     const valveError = typeof rawValveError === 'string' && rawValveError.trim().length
       ? rawValveError.trim()
       : '';
+    // `fault` / `fault_message` only exist on newer integration versions.
+    const rawFault = climate.attributes.fault;
+    const fault = typeof rawFault === 'string' && rawFault.trim() && rawFault.trim() !== 'none'
+      ? rawFault.trim()
+      : '';
+    const faultDetails = FAULT_DETAILS[fault] || { icon: 'mdi:alert-circle', message: `Fault: ${fault}` };
+    const rawFaultMessage = climate.attributes.fault_message;
+    const faultMessage = fault
+      ? (typeof rawFaultMessage === 'string' && rawFaultMessage.trim() ? rawFaultMessage.trim() : faultDetails.message)
+      : '';
+    const showValveError = valveError && valveError !== faultMessage;
 
     const humidityKnown = humiditySensor && humiditySensor.state &&
       humiditySensor.state !== 'unknown' && humiditySensor.state !== 'unavailable';
@@ -330,9 +511,12 @@ class AdaptiveThermostatCard extends LitElement {
     }
 
     const statusSeparator = String.fromCharCode(8226);
-    const toggleLabel = !isOn
+    let toggleLabel = !isOn
       ? 'Off'
       : `On ${statusSeparator} ${hvacAction === 'heating' ? 'Heating' : 'Idle'}`;
+    if (powerPending) {
+      toggleLabel = isOn ? 'Turning on…' : 'Turning off…';
+    }
 
     return html`
       <ha-card @click="${this._handleCardClick}">
@@ -357,7 +541,14 @@ class AdaptiveThermostatCard extends LitElement {
             ` : ''}
           </div>
 
-          ${valveError ? html`
+          ${fault ? html`
+            <div class="row error-row fault-row" data-fault="${fault}">
+              <ha-icon icon="${faultDetails.icon}"></ha-icon>
+              <span class="alert-text">${faultMessage}</span>
+            </div>
+          ` : ''}
+
+          ${showValveError ? html`
             <div class="row error-row">
               <ha-icon icon="mdi:alert-circle"></ha-icon>
               <span class="alert-text">${valveError}</span>
@@ -382,7 +573,8 @@ class AdaptiveThermostatCard extends LitElement {
 
           <div class="row actions-row">
             <button
-              class="action-button toggle-button ${isOn ? 'active' : 'inactive'}"
+              class="action-button toggle-button ${isOn ? 'active' : 'inactive'} ${powerPending ? 'pending' : ''}"
+              aria-busy="${powerPending ? 'true' : 'false'}"
               @click="${this._togglePower}"
             >
               <ha-icon icon="${isOn ? 'mdi:fire' : 'mdi:power'}"></ha-icon>
@@ -390,7 +582,8 @@ class AdaptiveThermostatCard extends LitElement {
             </button>
             <div class="preset-menu ${this._presetMenuOpen ? 'open' : ''}">
               <button
-                class="action-button preset-button ${activePreset ? 'active' : ''}"
+                class="action-button preset-button ${activePreset ? 'active' : ''} ${presetPending ? 'pending' : ''}"
+                aria-busy="${presetPending ? 'true' : 'false'}"
                 @click="${this._togglePresetMenu}"
                 ?disabled=${!orderedPresets.length}
               >
@@ -413,6 +606,13 @@ class AdaptiveThermostatCard extends LitElement {
               ` : ''}
             </div>
           </div>
+
+          ${this._actionError ? html`
+            <div class="row action-error" role="alert">
+              <ha-icon icon="mdi:alert-circle-outline"></ha-icon>
+              <span>${this._actionError}</span>
+            </div>
+          ` : ''}
 
           ${this._renderHistorySection(climate)}
         </div>
@@ -495,25 +695,37 @@ class AdaptiveThermostatCard extends LitElement {
       return;
     }
 
-    const availableModes = climate.attributes.hvac_modes || [];
+    // Ignore repeated taps until HA confirms (or the pending state times out).
+    if (this._pendingHvacMode && !this._isPendingExpired(this._pendingHvacMode)) {
+      return;
+    }
 
-    if (climate.state === 'off') {
-      const preferredMode = availableModes.includes('heat')
+    const availableModes = climate.attributes.hvac_modes || [];
+    let nextMode = 'off';
+
+    if (!this._getEffectiveIsOn(climate)) {
+      nextMode = availableModes.includes('heat')
         ? 'heat'
         : availableModes.find(mode => mode !== 'off');
-
-      if (preferredMode) {
-        this.hass.callService('climate', 'set_hvac_mode', {
-          entity_id: entityId,
-          hvac_mode: preferredMode
-        });
-      }
-    } else {
-      this.hass.callService('climate', 'set_hvac_mode', {
-        entity_id: entityId,
-        hvac_mode: 'off'
-      });
     }
+
+    if (!nextMode) {
+      return;
+    }
+
+    const pending = { mode: nextMode, timestamp: Date.now() };
+    this._pendingHvacMode = pending;
+    this.requestUpdate();
+
+    this._callService('climate', 'set_hvac_mode', {
+      entity_id: entityId,
+      hvac_mode: nextMode
+    }).catch(() => {
+      if (this._pendingHvacMode === pending) {
+        this._pendingHvacMode = null;
+      }
+      this._showActionError(nextMode === 'off' ? 'Could not turn off.' : 'Could not turn on.');
+    });
   }
 
   _togglePresetMenu(e) {
@@ -524,6 +736,10 @@ class AdaptiveThermostatCard extends LitElement {
 
     if (this._presetMenuOpen) {
       this._closePresetMenu();
+      return;
+    }
+
+    if (this._pendingPreset && !this._isPendingExpired(this._pendingPreset)) {
       return;
     }
 
@@ -538,7 +754,11 @@ class AdaptiveThermostatCard extends LitElement {
       e.preventDefault();
     }
 
-    this._setPreset(preset);
+    const climate = this.hass.states[this.config.entity];
+    const pendingActive = this._pendingPreset && !this._isPendingExpired(this._pendingPreset);
+    if (climate && !pendingActive && this._getEffectivePreset(climate) !== preset) {
+      this._setPreset(preset);
+    }
     this._closePresetMenu();
   }
 
@@ -567,6 +787,13 @@ class AdaptiveThermostatCard extends LitElement {
 
     if (!path.includes(menu)) {
       this._closePresetMenu();
+      if (path.includes(this)) {
+        // Closing the menu by tapping the card must not also open more-info.
+        this._suppressCardClick = true;
+        setTimeout(() => {
+          this._suppressCardClick = false;
+        }, 0);
+      }
     }
   }
 
@@ -581,14 +808,26 @@ class AdaptiveThermostatCard extends LitElement {
       return;
     }
 
-    this.hass.callService('adaptive_thermostat', 'dismiss_window_alert', {
+    this._callService('adaptive_thermostat', 'dismiss_window_alert', {
       entity_id: entityId
+    }).catch(() => {
+      this._showActionError('Could not dismiss the window alert.');
     });
   }
 
   disconnectedCallback() {
     document.removeEventListener('click', this._handleOutsideClick, true);
     this._presetMenuOpen = false;
+    // Send a queued +/- now instead of losing it when the dashboard is left.
+    this._flushTargetTemperature();
+    clearTimeout(this._pendingExpiryTimer);
+    this._pendingExpiryTimer = null;
+    clearTimeout(this._actionErrorTimer);
+    this._actionErrorTimer = null;
+    this._actionError = '';
+    this._suppressCardClick = false;
+    // Re-render so a reattached card doesn't show a stale open dropdown.
+    this.requestUpdate();
     super.disconnectedCallback();
   }
 
@@ -713,6 +952,21 @@ class AdaptiveThermostatCard extends LitElement {
         flex-shrink: 0;
       }
 
+      .action-error {
+        width: 100%;
+        gap: 8px;
+        padding: 0 4px;
+        box-sizing: border-box;
+        color: var(--error-color, #d32f2f);
+        font-size: 0.85rem;
+        font-weight: 500;
+      }
+
+      .action-error ha-icon {
+        --mdc-icon-size: 18px;
+        flex-shrink: 0;
+      }
+
       .target-row {
         width: 100%;
         justify-content: space-between;
@@ -793,6 +1047,23 @@ class AdaptiveThermostatCard extends LitElement {
       .toggle-button.inactive {
         background: rgba(0, 0, 0, 0.05);
         color: var(--secondary-text-color);
+      }
+
+      .action-button.pending {
+        cursor: progress;
+        animation: pending-pulse 1.2s ease-in-out infinite;
+      }
+
+      @keyframes pending-pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.55; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .action-button.pending {
+          animation: none;
+          opacity: 0.7;
+        }
       }
 
       .preset-button {
@@ -1041,6 +1312,7 @@ class AdaptiveThermostatHistory extends LitElement {
     this._error = null;
     this._fetchedOnce = false;
     this._fetching = false;
+    this._fetchSeq = 0;
     this._refreshTimer = null;
   }
 
@@ -1059,7 +1331,8 @@ class AdaptiveThermostatHistory extends LitElement {
 
   updated(changed) {
     if (changed.has('climateEntity') || changed.has('humidityEntity') || changed.has('hours')) {
-      this._fetchHistory();
+      // Force: a range/entity change must not be dropped because a fetch is running.
+      this._fetchHistory(true);
     } else if (changed.has('hass') && !this._fetchedOnce) {
       this._fetchHistory();
     }
@@ -1069,10 +1342,11 @@ class AdaptiveThermostatHistory extends LitElement {
     }
   }
 
-  async _fetchHistory() {
-    if (!this.hass || !this.climateEntity || this._fetching) {
+  async _fetchHistory(force = false) {
+    if (!this.hass || !this.climateEntity || (this._fetching && !force)) {
       return;
     }
+    const seq = ++this._fetchSeq;
     this._fetching = true;
     this._fetchedOnce = true;
     if (!this._data) {
@@ -1081,6 +1355,9 @@ class AdaptiveThermostatHistory extends LitElement {
     this._error = null;
 
     try {
+      if (typeof this.hass.callWS !== 'function') {
+        throw new Error('History unavailable');
+      }
       const end = new Date();
       const start = new Date(end.getTime() - this.hours * 3600000);
       const entityIds = [this.climateEntity];
@@ -1103,13 +1380,35 @@ class AdaptiveThermostatHistory extends LitElement {
         significant_changes_only: false
       });
 
+      if (seq !== this._fetchSeq) {
+        return;
+      }
       this._data = this._processHistory(result, start.getTime(), end.getTime());
     } catch (err) {
-      this._error = (err && err.message) ? err.message : 'History unavailable';
+      if (seq !== this._fetchSeq) {
+        return;
+      }
+      const message = (err && err.message) || (typeof err === 'string' ? err : '') || 'History unavailable';
+      if (this._data) {
+        // Keep the last good chart on a failed background refresh.
+        console.warn('adaptive-thermostat-card: history refresh failed:', message);
+      } else {
+        this._error = message;
+      }
     } finally {
-      this._loading = false;
-      this._fetching = false;
+      if (seq === this._fetchSeq) {
+        this._loading = false;
+        this._fetching = false;
+      }
     }
+  }
+
+  _retryHistory(e) {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    this._fetchHistory(true);
   }
 
   _processHistory(result, startMs, endMs) {
@@ -1188,7 +1487,12 @@ class AdaptiveThermostatHistory extends LitElement {
 
   render() {
     if (this._error) {
-      return html`<div class="state error">${this._error}</div>`;
+      return html`
+        <div class="state error">
+          ${this._error}
+          <button class="retry" @click="${this._retryHistory}">Retry</button>
+        </div>
+      `;
     }
     if (!this._data) {
       return html`<div class="state">Loading history…</div>`;
@@ -1563,6 +1867,17 @@ class AdaptiveThermostatHistory extends LitElement {
 
       .state.error {
         color: var(--error-color, #d32f2f);
+      }
+
+      .retry {
+        margin-left: 8px;
+        border: 1px solid currentColor;
+        border-radius: 8px;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        padding: 2px 10px;
+        cursor: pointer;
       }
     `;
   }
