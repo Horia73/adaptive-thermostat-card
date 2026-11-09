@@ -642,6 +642,7 @@ class AdaptiveThermostatCard extends LitElement {
     return attrs.heat_flowing === true ||
       (attrs.cycle_tail_duration_s != null && Number.isFinite(tail) && tail > 0) ||
       attrs.control_reason === 'predicted peak reaches target' ||
+      attrs.control_reason === 'predicted peak reaches aim' ||
       attrs.control_reason === 'waiting for tail';
   }
 
