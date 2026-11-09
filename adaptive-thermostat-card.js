@@ -1,4 +1,4 @@
-// Version: 2026-10-25-1500
+// Version: 2026-11-09-1300
 const LitElement = Object.getPrototypeOf(
   customElements.get("ha-panel-lovelace")
 );
@@ -511,9 +511,16 @@ class AdaptiveThermostatCard extends LitElement {
     }
 
     const statusSeparator = String.fromCharCode(8226);
-    let toggleLabel = !isOn
-      ? 'Off'
-      : `On ${statusSeparator} ${hvacAction === 'heating' ? 'Heating' : 'Idle'}`;
+    const coasting = isOn && !powerPending && hvacAction === 'idle' && this._isCoasting(climate.attributes);
+    const predictedPeak = Number(climate.attributes.predicted_peak);
+    const toggleHint = coasting && climate.attributes.predicted_peak != null && Number.isFinite(predictedPeak)
+      ? `peak ${predictedPeak.toFixed(1)}°`
+      : '';
+    let actionLabel = hvacAction === 'heating' ? 'Heating' : 'Idle';
+    if (coasting) {
+      actionLabel = 'Coasting';
+    }
+    let toggleLabel = !isOn ? 'Off' : `On ${statusSeparator} ${actionLabel}`;
     if (powerPending) {
       toggleLabel = isOn ? 'Turning on…' : 'Turning off…';
     }
@@ -574,11 +581,17 @@ class AdaptiveThermostatCard extends LitElement {
           <div class="row actions-row">
             <button
               class="action-button toggle-button ${isOn ? 'active' : 'inactive'} ${powerPending ? 'pending' : ''}"
+              title="${coasting ? 'Heating stopped; radiators are still releasing heat' : ''}"
               aria-busy="${powerPending ? 'true' : 'false'}"
               @click="${this._togglePower}"
             >
               <ha-icon icon="${isOn ? 'mdi:fire' : 'mdi:power'}"></ha-icon>
-              <span>${toggleLabel}</span>
+              ${toggleHint ? html`
+                <span class="toggle-text">
+                  <span class="toggle-label">${toggleLabel}</span>
+                  <span class="toggle-hint">${toggleHint}</span>
+                </span>
+              ` : html`<span>${toggleLabel}</span>`}
             </button>
             <div class="preset-menu ${this._presetMenuOpen ? 'open' : ''}">
               <button
@@ -618,6 +631,18 @@ class AdaptiveThermostatCard extends LitElement {
         </div>
       </ha-card>
     `;
+  }
+
+  // Idle, but the radiators are still giving off heat from the last burst.
+  _isCoasting(attrs) {
+    if (!attrs) {
+      return false;
+    }
+    const tail = Number(attrs.cycle_tail_duration_s);
+    return attrs.heat_flowing === true ||
+      (attrs.cycle_tail_duration_s != null && Number.isFinite(tail) && tail > 0) ||
+      attrs.control_reason === 'predicted peak reaches target' ||
+      attrs.control_reason === 'waiting for tail';
   }
 
   _renderHistorySection(climate) {
@@ -1044,6 +1069,28 @@ class AdaptiveThermostatCard extends LitElement {
         color: rgb(255, 87, 34);
       }
 
+      .toggle-text {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        min-width: 0;
+        line-height: 1.15;
+      }
+
+      .toggle-label,
+      .toggle-hint {
+        max-width: 100%;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .toggle-hint {
+        font-size: 0.72rem;
+        font-weight: 500;
+        opacity: 0.8;
+      }
+
       .toggle-button.inactive {
         background: rgba(0, 0, 0, 0.05);
         color: var(--secondary-text-color);
@@ -1287,9 +1334,37 @@ class AdaptiveThermostatCardEditor extends LitElement {
 // Home Assistant's native climate more-info graph only plots the climate entity
 // (current + target temperature) and cannot overlay a separate humidity sensor, so
 // this self-contained, dependency-free SVG chart renders all three series together.
-const HISTORY_SERIES_COLORS = { temp: '#2196f3', target: '#ff9800', humidity: '#26a69a' };
+// Heating periods (hvac_action == 'heating') are drawn as translucent bands behind them.
+const HISTORY_SERIES_COLORS = { temp: '#2196f3', target: '#ff9800', humidity: '#26a69a', heating: '#ff5722' };
+const HISTORY_HEATING_RGB = '255, 87, 34';
 const HISTORY_REFRESH_MS = 300000;
+// Range toggles / reopening reuse a fetch this recent instead of hitting the recorder again.
+const HISTORY_CACHE_MS = 60000;
+const HISTORY_CACHE_MAX = 12;
+const HISTORY_RANGE_DEBOUNCE_MS = 250;
+// Minimum band width in viewBox units (~CSS px) so 2–3 min bursts stay visible on a 3d axis.
+const HISTORY_MIN_BAND_WIDTH = 2;
 const HISTORY_SVG_NS = 'http://www.w3.org/2000/svg';
+const historyCache = new Map();
+
+// "40 s", "2 min 40 s" (under 10 min), "25 min", "2 h 32 min".
+function formatHeatingDuration(ms) {
+  const total = Math.max(0, Math.round(ms / 1000));
+  if (total < 60) {
+    return `${total} s`;
+  }
+  if (total < 600) {
+    const sec = total % 60;
+    return sec ? `${Math.floor(total / 60)} min ${sec} s` : `${Math.floor(total / 60)} min`;
+  }
+  const minutes = Math.round(total / 60);
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (!h) {
+    return `${m} min`;
+  }
+  return m ? `${h} h ${m} min` : `${h} h`;
+}
 
 class AdaptiveThermostatHistory extends LitElement {
   static get properties() {
@@ -1314,11 +1389,20 @@ class AdaptiveThermostatHistory extends LitElement {
     this._fetching = false;
     this._fetchSeq = 0;
     this._refreshTimer = null;
+    this._rangeTimer = null;
+    this._hideTip = null;
+    this._onDocPointerDown = (evt) => {
+      // Touch tooltips stay open after the finger lifts; a tap elsewhere closes them.
+      if (this._hideTip && !evt.composedPath().includes(this)) {
+        this._hideTip();
+      }
+    };
   }
 
   connectedCallback() {
     super.connectedCallback();
     this._refreshTimer = setInterval(() => this._fetchHistory(), HISTORY_REFRESH_MS);
+    document.addEventListener('pointerdown', this._onDocPointerDown, true);
   }
 
   disconnectedCallback() {
@@ -1326,15 +1410,17 @@ class AdaptiveThermostatHistory extends LitElement {
       clearInterval(this._refreshTimer);
       this._refreshTimer = null;
     }
+    clearTimeout(this._rangeTimer);
+    this._rangeTimer = null;
+    document.removeEventListener('pointerdown', this._onDocPointerDown, true);
     super.disconnectedCallback();
   }
 
   updated(changed) {
     if (changed.has('climateEntity') || changed.has('humidityEntity') || changed.has('hours')) {
-      // Force: a range/entity change must not be dropped because a fetch is running.
-      this._fetchHistory(true);
+      this._scheduleFetch();
     } else if (changed.has('hass') && !this._fetchedOnce) {
-      this._fetchHistory();
+      this._scheduleFetch();
     }
 
     if (changed.has('_data') || changed.has('_loading') || changed.has('_error')) {
@@ -1342,11 +1428,48 @@ class AdaptiveThermostatHistory extends LitElement {
     }
   }
 
+  _cacheKey() {
+    return `${this.climateEntity}|${this.humidityEntity || ''}|${this.hours}`;
+  }
+
+  // Range/entity change: show a fresh cached result instantly, otherwise debounce the
+  // fetch so quickly tapping 12h → 24h → 3d sends one request, not three.
+  _scheduleFetch() {
+    if (!this.hass || !this.climateEntity) {
+      return;
+    }
+    this._fetchedOnce = true;
+    clearTimeout(this._rangeTimer);
+    this._rangeTimer = null;
+
+    const cached = historyCache.get(this._cacheKey());
+    if (cached && Date.now() - cached.at < HISTORY_CACHE_MS) {
+      this._fetchSeq++; // drop any in-flight fetch for the previous range
+      this._fetching = false;
+      this._loading = false;
+      this._error = null;
+      this._data = cached.data;
+      return;
+    }
+    if (!this._data) {
+      // Nothing on screen yet: fetch right away.
+      this._fetchHistory(true);
+      return;
+    }
+    this._rangeTimer = setTimeout(() => {
+      this._rangeTimer = null;
+      // Force: a range/entity change must not be dropped because a fetch is running.
+      this._fetchHistory(true);
+    }, HISTORY_RANGE_DEBOUNCE_MS);
+  }
+
   async _fetchHistory(force = false) {
     if (!this.hass || !this.climateEntity || (this._fetching && !force)) {
       return;
     }
     const seq = ++this._fetchSeq;
+    const cacheKey = this._cacheKey();
+    const hours = this.hours;
     this._fetching = true;
     this._fetchedOnce = true;
     if (!this._data) {
@@ -1359,7 +1482,7 @@ class AdaptiveThermostatHistory extends LitElement {
         throw new Error('History unavailable');
       }
       const end = new Date();
-      const start = new Date(end.getTime() - this.hours * 3600000);
+      const start = new Date(end.getTime() - hours * 3600000);
       const entityIds = [this.climateEntity];
       if (this.humidityEntity) {
         entityIds.push(this.humidityEntity);
@@ -1369,7 +1492,8 @@ class AdaptiveThermostatHistory extends LitElement {
       // climate component treats sub-0.5° attribute changes as insignificant, so
       // filtering would drop fine temperature detail and small target adjustments —
       // exactly what the native graph shows. minimal_response must also stay false so
-      // attribute (current/target temperature) changes are returned, not just states.
+      // attribute (current/target temperature, hvac_action) changes are returned, not
+      // just states — heating on/off is an attribute-only change of the climate entity.
       const result = await this.hass.callWS({
         type: 'history/history_during_period',
         start_time: start.toISOString(),
@@ -1383,7 +1507,14 @@ class AdaptiveThermostatHistory extends LitElement {
       if (seq !== this._fetchSeq) {
         return;
       }
-      this._data = this._processHistory(result, start.getTime(), end.getTime());
+      const data = this._processHistory(result, start.getTime(), end.getTime());
+      data.hours = hours;
+      historyCache.delete(cacheKey);
+      historyCache.set(cacheKey, { at: Date.now(), data });
+      while (historyCache.size > HISTORY_CACHE_MAX) {
+        historyCache.delete(historyCache.keys().next().value);
+      }
+      this._data = data;
     } catch (err) {
       if (seq !== this._fetchSeq) {
         return;
@@ -1412,17 +1543,45 @@ class AdaptiveThermostatHistory extends LitElement {
   }
 
   _processHistory(result, startMs, endMs) {
-    const climateStates = (result && result[this.climateEntity]) || [];
+    const rawClimate = result && result[this.climateEntity];
+    const climateStates = Array.isArray(rawClimate) ? rawClimate : [];
     let attrs = {};
     const temp = [];
     const target = [];
+    const heating = [];
+    let hasHeatingInfo = false;
+    let heatStart = null;
+    const closeHeating = (endTs, open) => {
+      const s = Math.max(heatStart, startMs);
+      const e = Math.min(endTs, endMs);
+      if (e > s) {
+        // s/e are clipped to the visible range; rawS/rawE are the real burst edges.
+        heating.push({ s, e, rawS: heatStart, rawE: endTs, open });
+      }
+      heatStart = null;
+    };
 
     for (const point of climateStates) {
+      if (!point) {
+        continue;
+      }
       // Compressed history only repeats attributes that changed, so carry them forward.
       if (point.a) {
         attrs = { ...attrs, ...point.a };
       }
       const ts = (point.lu != null ? point.lu : point.lc) * 1000;
+      if (!Number.isFinite(ts)) {
+        continue;
+      }
+      const heatingNow = this._heatingState(point.s, attrs);
+      if (heatingNow !== null) {
+        hasHeatingInfo = true;
+        if (heatingNow && heatStart === null) {
+          heatStart = ts;
+        } else if (!heatingNow && heatStart !== null) {
+          closeHeating(ts, false);
+        }
+      }
       const current = Number(attrs.current_temperature);
       const setpoint = Number(attrs.temperature);
       if (Number.isFinite(current)) {
@@ -1444,13 +1603,36 @@ class AdaptiveThermostatHistory extends LitElement {
       }
     }
 
+    if (heatStart !== null) {
+      // Still heating when the history was fetched: the band runs to now.
+      closeHeating(endMs, true);
+    }
+
     return {
       temp: this._downsample(temp, 500),
       target: this._dedupeSteps(target),
       humidity: this._downsample(humidity, 500),
+      heating,
+      heatingTotalMs: heating.reduce((sum, b) => sum + (b.e - b.s), 0),
+      hasHeatingInfo,
       startMs,
       endMs
     };
+  }
+
+  // true/false from hvac_action (or zone_heater_on on entities without it); null if unknown.
+  _heatingState(state, attrs) {
+    if (state === 'off' || state === 'unavailable' || state === 'unknown') {
+      return false;
+    }
+    const action = attrs.hvac_action;
+    if (typeof action === 'string' && action) {
+      return action === 'heating';
+    }
+    if (typeof attrs.zone_heater_on === 'boolean') {
+      return attrs.zone_heater_on;
+    }
+    return null;
   }
 
   _downsample(points, max) {
@@ -1501,13 +1683,19 @@ class AdaptiveThermostatHistory extends LitElement {
       return html`<div class="state">No history available</div>`;
     }
 
-    const hasHumidity = !!this.humidityEntity && this._data.humidity.length > 0;
+    const data = this._data;
+    const hasHumidity = !!this.humidityEntity && data.humidity.length > 0;
+    const heatingCount = (data.heating || []).length;
+    const heatingTotal = heatingCount ? formatHeatingDuration(data.heatingTotalMs) : '0 min';
     return html`
       <div class="legend">
         <span class="legend-item"><i style="background:${HISTORY_SERIES_COLORS.temp}"></i>Temp</span>
         <span class="legend-item"><i style="background:${HISTORY_SERIES_COLORS.target}"></i>Target</span>
         ${hasHumidity ? html`
           <span class="legend-item"><i style="background:${HISTORY_SERIES_COLORS.humidity}"></i>Humidity</span>
+        ` : ''}
+        ${data.hasHeatingInfo ? html`
+          <span class="legend-item heating"><i class="band" style="background:rgba(${HISTORY_HEATING_RGB}, 0.45)"></i>Heating ${heatingTotal} · ${heatingCount}×</span>
         ` : ''}
       </div>
       <div class="plot"></div>
@@ -1520,6 +1708,7 @@ class AdaptiveThermostatHistory extends LitElement {
       return;
     }
     plot.textContent = '';
+    this._hideTip = null;
 
     const data = this._data;
     if (!data) {
@@ -1601,6 +1790,9 @@ class AdaptiveThermostatHistory extends LitElement {
       .tip-bg{fill:var(--card-background-color,#fff);stroke:var(--divider-color,rgba(127,127,127,0.4))}
       .tip-time{fill:var(--secondary-text-color,#888);font-size:8.5px}
       .tip-text{font-size:9px}
+      .band{fill:rgba(${HISTORY_HEATING_RGB},0.16)}
+      .band.active{fill:rgba(${HISTORY_HEATING_RGB},0.32)}
+      .band-mark{fill:rgba(${HISTORY_HEATING_RGB},0.85)}
     `;
     svg.appendChild(style);
 
@@ -1630,6 +1822,23 @@ class AdaptiveThermostatHistory extends LitElement {
       svg.appendChild(label);
     }
 
+    // Heating bands sit behind the lines: full plot height plus a solid strip on the
+    // bottom edge so the shortest bursts still read at a glance.
+    const bands = this._heatingBands(data.heating || [], xOf, margin, pw);
+    if (bands.length) {
+      const group = mk('g', { class: 'heating-bands' });
+      for (const band of bands) {
+        band.node = mk('rect', {
+          class: 'band', x: band.x.toFixed(2), y: margin.t, width: band.w.toFixed(2), height: ph
+        });
+        group.appendChild(band.node);
+        group.appendChild(mk('rect', {
+          class: 'band-mark', x: band.x.toFixed(2), y: margin.t + ph - 3, width: band.w.toFixed(2), height: 3
+        }));
+      }
+      svg.appendChild(group);
+    }
+
     if (hasHumidity) {
       svg.appendChild(this._linePath(mk, humidity, xOf, yHum, 's-humidity'));
     }
@@ -1642,9 +1851,42 @@ class AdaptiveThermostatHistory extends LitElement {
 
     this._attachHover(svg, mk, { temp, target, humidity }, {
       xOf, yTemp, yHum, margin, pw, ph, W, startMs, endMs, span, hasHumidity
-    });
+    }, bands);
 
     plot.appendChild(svg);
+  }
+
+  _heatingBands(intervals, xOf, margin, pw) {
+    const left = margin.l;
+    const right = margin.l + pw;
+    return intervals.map((interval) => {
+      const x1 = xOf(interval.s);
+      const x2 = xOf(interval.e);
+      let x = x1;
+      let w = x2 - x1;
+      if (w < HISTORY_MIN_BAND_WIDTH) {
+        w = HISTORY_MIN_BAND_WIDTH;
+        x = Math.max(left, Math.min(right - w, (x1 + x2) / 2 - w / 2));
+      }
+      return { ...interval, x, w };
+    });
+  }
+
+  _formatHeatingInterval(band) {
+    const startLabel = this._formatTooltipTime(band.rawS);
+    let endLabel = 'now';
+    if (!band.open) {
+      const sameDay = new Date(band.rawS).toDateString() === new Date(band.rawE).toDateString();
+      endLabel = sameDay
+        ? new Date(band.rawE).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+        : this._formatTooltipTime(band.rawE);
+    }
+    const duration = formatHeatingDuration((band.open ? band.e : band.rawE) - band.rawS);
+    return `Heating: ${startLabel}–${endLabel} · ${duration}`;
+  }
+
+  _rangeHours() {
+    return (this._data && this._data.hours) || this.hours;
   }
 
   _ticks(min, max, count) {
@@ -1662,7 +1904,7 @@ class AdaptiveThermostatHistory extends LitElement {
 
   _formatTime(ms) {
     const date = new Date(ms);
-    if (this.hours > 48) {
+    if (this._rangeHours() > 48) {
       return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
     }
     return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
@@ -1670,7 +1912,7 @@ class AdaptiveThermostatHistory extends LitElement {
 
   _formatTooltipTime(ms) {
     const date = new Date(ms);
-    const options = this.hours > 24
+    const options = this._rangeHours() > 24
       ? { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }
       : { hour: '2-digit', minute: '2-digit' };
     return date.toLocaleString(undefined, options);
@@ -1700,7 +1942,7 @@ class AdaptiveThermostatHistory extends LitElement {
     return mk('path', { class: `series ${cls}`, d });
   }
 
-  _attachHover(svg, mk, series, geo) {
+  _attachHover(svg, mk, series, geo, bands = []) {
     const { xOf, yTemp, yHum, margin, pw, ph, W, startMs, span, hasHumidity } = geo;
 
     const active = [];
@@ -1736,6 +1978,8 @@ class AdaptiveThermostatHistory extends LitElement {
       group.appendChild(text);
       return text;
     });
+    const tipHeat = mk('text', { class: 'tip-text', style: `fill:${HISTORY_SERIES_COLORS.heating}`, display: 'none' });
+    group.appendChild(tipHeat);
     svg.appendChild(group);
 
     const overlay = mk('rect', {
@@ -1764,8 +2008,32 @@ class AdaptiveThermostatHistory extends LitElement {
       return result;
     };
 
+    // Band under the pointer; touch gets a wider hit area than the 2–3 px band itself.
+    const bandAt = (px, pointerType) => {
+      const tolerance = pointerType === 'mouse' ? 1 : 4;
+      let best = null;
+      let bestDist = Infinity;
+      for (const band of bands) {
+        const dist = px < band.x ? band.x - px : (px > band.x + band.w ? px - band.x - band.w : 0);
+        if (dist <= tolerance && dist < bestDist) {
+          best = band;
+          bestDist = dist;
+        }
+      }
+      return best;
+    };
+    let activeBand = null;
+    const setActiveBand = (band) => {
+      if (band === activeBand) {
+        return;
+      }
+      if (activeBand && activeBand.node) activeBand.node.setAttribute('class', 'band');
+      if (band && band.node) band.node.setAttribute('class', 'band active');
+      activeBand = band;
+    };
+
     const lineHeight = 11;
-    const boxWidth = this.hours > 24 ? 108 : 82;
+    const boxWidth = this._rangeHours() > 24 ? 108 : 82;
 
     const onMove = (evt) => {
       const rect = svg.getBoundingClientRect();
@@ -1786,36 +2054,71 @@ class AdaptiveThermostatHistory extends LitElement {
         return `${this._seriesLabel(s.key)}: ${this._round(point.v, s.decimals)}${s.unit}`;
       });
 
-      const boxHeight = 13 + active.length * lineHeight;
-      let bx = px + 8;
-      if (bx + boxWidth > margin.l + pw) {
-        bx = px - boxWidth - 8;
+      const band = bandAt(vbX, evt.pointerType);
+      setActiveBand(band);
+
+      tipTime.textContent = this._formatTooltipTime(t);
+      active.forEach((s, i) => {
+        tipTexts[i].textContent = values[i];
+      });
+      const lines = active.length + (band ? 1 : 0);
+      if (band) {
+        tipHeat.textContent = this._formatHeatingInterval(band);
+        tipHeat.removeAttribute('display');
+      } else {
+        tipHeat.setAttribute('display', 'none');
       }
-      bx = Math.max(margin.l, bx);
+
+      // The heating line is longer than the value lines; size the box to its text.
+      let width = boxWidth;
+      try {
+        for (const text of band ? [tipTime, ...tipTexts, tipHeat] : [tipTime, ...tipTexts]) {
+          width = Math.max(width, text.getComputedTextLength() + 12);
+        }
+      } catch (err) {
+        if (band) width = Math.max(width, 190);
+      }
+      width = Math.min(width, pw);
+
+      const boxHeight = 13 + lines * lineHeight;
+      let bx = px + 8;
+      if (bx + width > margin.l + pw) {
+        bx = px - width - 8;
+      }
+      bx = Math.max(margin.l, Math.min(bx, margin.l + pw - width));
       const by = margin.t + 2;
 
       tipBg.setAttribute('x', bx.toFixed(1));
       tipBg.setAttribute('y', by.toFixed(1));
-      tipBg.setAttribute('width', boxWidth);
+      tipBg.setAttribute('width', width.toFixed(1));
       tipBg.setAttribute('height', boxHeight);
       tipTime.setAttribute('x', (bx + 6).toFixed(1));
       tipTime.setAttribute('y', (by + 10).toFixed(1));
-      tipTime.textContent = this._formatTooltipTime(t);
       active.forEach((s, i) => {
-        const text = tipTexts[i];
-        text.setAttribute('x', (bx + 6).toFixed(1));
-        text.setAttribute('y', (by + 10 + (i + 1) * lineHeight).toFixed(1));
-        text.textContent = values[i];
+        tipTexts[i].setAttribute('x', (bx + 6).toFixed(1));
+        tipTexts[i].setAttribute('y', (by + 10 + (i + 1) * lineHeight).toFixed(1));
       });
+      tipHeat.setAttribute('x', (bx + 6).toFixed(1));
+      tipHeat.setAttribute('y', (by + 10 + lines * lineHeight).toFixed(1));
 
       group.setAttribute('visibility', 'visible');
     };
-    const onLeave = () => group.setAttribute('visibility', 'hidden');
+    const hide = () => {
+      group.setAttribute('visibility', 'hidden');
+      setActiveBand(null);
+    };
+    // A lifted finger fires pointerleave; keep touch tooltips readable until the next tap.
+    const onLeave = (evt) => {
+      if (evt.pointerType === 'mouse') {
+        hide();
+      }
+    };
+    this._hideTip = hide;
 
     overlay.addEventListener('pointermove', onMove);
     overlay.addEventListener('pointerdown', onMove);
     overlay.addEventListener('pointerleave', onLeave);
-    overlay.addEventListener('pointercancel', onLeave);
+    overlay.addEventListener('pointercancel', hide);
   }
 
   static get styles() {
@@ -1845,6 +2148,10 @@ class AdaptiveThermostatHistory extends LitElement {
         height: 3px;
         border-radius: 2px;
         display: inline-block;
+      }
+
+      .legend-item i.band {
+        height: 8px;
       }
 
       .plot {
